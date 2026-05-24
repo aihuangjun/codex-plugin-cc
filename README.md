@@ -147,6 +147,14 @@ npm run bump-version 2.5.0    # explicit version
 npm run check-version  # CI runs this; fails the build on drift
 ```
 
+Cut a release once the bump commit + an updated `## [X.Y.Z] — YYYY-MM-DD` CHANGELOG section are merged into `main`:
+
+```bash
+npm run release             # tag + push + gh release create (notes come from CHANGELOG)
+npm run release -- --dry-run  # preview title and notes, don't touch git or GitHub
+```
+
+
 ---
 
 ## Acknowledgements

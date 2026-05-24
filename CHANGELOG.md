@@ -10,7 +10,11 @@ For end-user installation and verification scenarios, see [`docs/CHANGES_AND_USA
 
 ## [Unreleased]
 
-_No unreleased changes yet. New entries land here during the next development cycle and roll into the next tagged version on release._
+### Added
+- **`npm run release`** (`scripts/release.mjs`) — tag + push + GitHub Release creation for the current `package.json` version. Reads release notes from the matching CHANGELOG section, refuses to run on a dirty tree, refuses if the tag already exists. Supports `--dry-run` and `--repo owner/repo`.
+
+### Internal
+- Backfilled git tags `v2.0.0` / `v2.0.1` / `v2.0.2` on the corresponding bump commits; created the first GitHub Release for `v2.0.2`.
 
 ## [2.0.2] — 2026-05-24
 
