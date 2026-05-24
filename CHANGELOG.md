@@ -10,6 +10,8 @@ For end-user installation and verification scenarios, see [`docs/CHANGES_AND_USA
 
 ## [Unreleased]
 
+_No unreleased changes yet. New entries land here during the next development cycle and roll into the next tagged version on release._
+
 ## [2.0.2] — 2026-05-24
 
 ### Added
