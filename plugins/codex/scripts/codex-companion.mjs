@@ -23,10 +23,11 @@ import {
     runAppServerTurn
   } from "./lib/codex.mjs";
 import { readStdinIfPiped } from "./lib/fs.mjs";
-import { collectReviewContext, ensureGitRepository, resolveReviewTarget } from "./lib/git.mjs";
+import { buildDiffReviewContext, collectReviewContext, ensureGitRepository, resolveReviewTarget } from "./lib/git.mjs";
 import { binaryAvailable, terminateProcessTree } from "./lib/process.mjs";
 import { loadPromptTemplate, interpolateTemplate } from "./lib/prompts.mjs";
 import {
+  collectWorkspaceJobsAcrossRoots,
   generateJobId,
   getConfig,
   listJobs,
@@ -56,6 +57,7 @@ import {
 } from "./lib/tracked-jobs.mjs";
 import { resolveWorkspaceRoot, createWorktree } from "./lib/workspace.mjs";
 import {
+  renderHistoryReport,
   renderReviewResult,
   renderStoredJobResult,
   renderCancelReport,
@@ -72,6 +74,13 @@ const DEFAULT_STATUS_POLL_INTERVAL_MS = 2000;
 const VALID_REASONING_EFFORTS = new Set(["none", "minimal", "low", "medium", "high", "xhigh"]);
 const MODEL_ALIASES = new Map([["spark", "gpt-5.3-codex-spark"]]);
 const STOP_REVIEW_TASK_MARKER = "Run a stop-gate review of the previous Claude turn.";
+
+// 这两个阈值同时硬编码在 commands/review.md 和 commands/adversarial-review.md 的 Step 3 里。
+// 修改时**必须**同步更新两个命令模板（搜索 "files ≤" / "files >"）。
+export const SMART_ESTIMATE_THRESHOLDS = {
+  maxFiles: 30,
+  maxTotalLines: 3000
+};
 
 const REVIEW_KINDS = {
   REVIEW: {
@@ -99,7 +108,9 @@ function printUsage() {
       "  node scripts/codex-companion.mjs status [job-id] [--all] [--json]",
       "  node scripts/codex-companion.mjs result [job-id] [--json]",
       "  node scripts/codex-companion.mjs cancel [job-id] [--json]",
-      "  node scripts/codex-companion.mjs observe [job-id] [--cwd <path>]"
+      "  node scripts/codex-companion.mjs observe [job-id] [--cwd <path>]",
+      "  node scripts/codex-companion.mjs history [--all] [--limit <N>] [--json]",
+      "  node scripts/codex-companion.mjs diff (--file <path>|--commit <sha>|--range <a>..<b>) [focus]"
     ].join("\n")
   );
 }
@@ -347,14 +358,22 @@ async function executeReviewRun(request) {
   ensureCodexAvailable(request.cwd);
   ensureGitRepository(request.cwd);
 
-  const target = resolveReviewTarget(request.cwd, {
-    base: request.base,
-    scope: request.scope
-  });
   const focusText = request.focusText?.trim() ?? "";
   const reviewKind = request.reviewKind ?? REVIEW_KINDS.REVIEW;
 
-  const context = collectReviewContext(request.cwd, target);
+  let context;
+  let target;
+  if (request.diffSpec) {
+    context = buildDiffReviewContext(request.cwd, request.diffSpec);
+    target = context.target;
+  } else {
+    target = resolveReviewTarget(request.cwd, {
+      base: request.base,
+      scope: request.scope
+    });
+    context = collectReviewContext(request.cwd, target);
+  }
+
   const prompt = buildReviewPrompt(context, focusText, reviewKind);
   const result = await runAppServerTurn(context.repoRoot, {
     prompt,
@@ -509,31 +528,44 @@ function buildTaskRunMetadata({ prompt, resumeLast = false }) {
 }
 
 function renderQueuedTaskLaunch(payload) {
-  const lines = [`${payload.title} started in the background as ${payload.jobId}. Check /codex:status ${payload.jobId} for progress.`];
+  const lines = [
+    `${payload.title} started in the background.`,
+    `  Job id: ${payload.jobId}`,
+    "",
+    "Async control:",
+    `  /codex:status ${payload.jobId}     — current state, phase, recent progress`,
+    `  /codex:observe ${payload.jobId}    — live event stream (read-only, Ctrl+C exits observer only)`,
+    `  /codex:result ${payload.jobId}     — full final output (once status is completed/failed)`,
+    `  /codex:cancel ${payload.jobId}     — abort the run`
+  ];
   if (payload.worktreePath) {
-    lines.push(`  Worktree: ${payload.worktreePath}`);
+    lines.push("", "Worktree:", `  Path:   ${payload.worktreePath}`);
     if (payload.worktreeBranch) {
-      lines.push(`  Branch:   ${payload.worktreeBranch}`);
+      lines.push(`  Branch: ${payload.worktreeBranch}`);
     }
   }
   if (payload.signalFile) {
-    lines.push(`  Signal:   ${payload.signalFile}`);
+    lines.push("", `Signal file: ${payload.signalFile}`);
   }
+  lines.push("", "A PushNotification will fire automatically when the job finishes.");
   return `${lines.join("\n")}\n`;
 }
 
-function getJobKindLabel(kind, jobClass) {
-  if (kind === "adversarial-review") {
-    return "adversarial-review";
-  }
-  return jobClass === "review" ? "review" : "rescue";
+const JOB_KIND_LABELS = {
+  review: "review",
+  "adversarial-review": "adversarial-review",
+  task: "rescue"
+};
+
+function getJobKindLabel(kind) {
+  return JOB_KIND_LABELS[kind] ?? "rescue";
 }
 
 function createCompanionJob({ prefix, kind, title, workspaceRoot, jobClass, summary, write = false, id }) {
   return createJobRecord({
     id: id ?? generateJobId(prefix),
     kind,
-    kindLabel: getJobKindLabel(kind, jobClass),
+    kindLabel: getJobKindLabel(kind),
     title,
     workspaceRoot,
     jobClass,
@@ -709,6 +741,22 @@ async function handleReviewCommand(argv, config) {
     jobClass: "review",
     summary: metadata.summary
   });
+
+  if (options.background) {
+    ensureCodexAvailable(cwd);
+    const request = {
+      cwd,
+      base: options.base,
+      scope: options.scope,
+      model: options.model,
+      focusText,
+      reviewKind: config.reviewKind
+    };
+    const { payload } = enqueueBackgroundTask(cwd, job, request);
+    outputCommandResult(payload, renderQueuedTaskLaunch(payload), options.json);
+    return;
+  }
+
   await runForegroundCommand(
     job,
     (progress) =>
@@ -729,6 +777,76 @@ async function handleReview(argv) {
   return handleReviewCommand(argv, {
     reviewKind: REVIEW_KINDS.REVIEW
   });
+}
+
+function resolveDiffSpec(options) {
+  const provided = ["file", "commit", "range"].filter((key) => options[key] != null && String(options[key]).trim() !== "");
+  if (provided.length === 0) {
+    throw new Error("/codex:diff requires exactly one of --file <path>, --commit <sha>, or --range <a>..<b>.");
+  }
+  if (provided.length > 1) {
+    throw new Error(`/codex:diff accepts only one selector at a time; got: ${provided.map((k) => `--${k}`).join(", ")}.`);
+  }
+  const mode = provided[0];
+  return { mode, value: String(options[mode]).trim() };
+}
+
+async function handleDiff(argv) {
+  const { options, positionals } = parseCommandInput(argv, {
+    valueOptions: ["file", "commit", "range", "model", "cwd"],
+    booleanOptions: ["json", "background", "wait"],
+    aliasMap: {
+      m: "model"
+    }
+  });
+
+  const cwd = resolveCommandCwd(options);
+  const workspaceRoot = resolveCommandWorkspace(options);
+  const focusText = positionals.join(" ").trim();
+  const diffSpec = resolveDiffSpec(options);
+  const reviewKind = REVIEW_KINDS.REVIEW;
+
+  const metadata = {
+    kind: reviewKind.jobKind,
+    title: `Codex Diff Review (${diffSpec.mode})`,
+    summary: `${reviewKind.name} ${diffSpec.mode} ${diffSpec.value}`
+  };
+  const job = createCompanionJob({
+    prefix: "diff",
+    kind: metadata.kind,
+    title: metadata.title,
+    workspaceRoot,
+    jobClass: "review",
+    summary: metadata.summary
+  });
+
+  if (options.background) {
+    ensureCodexAvailable(cwd);
+    const request = {
+      cwd,
+      model: options.model,
+      focusText,
+      reviewKind,
+      diffSpec
+    };
+    const { payload } = enqueueBackgroundTask(cwd, job, request);
+    outputCommandResult(payload, renderQueuedTaskLaunch(payload), options.json);
+    return;
+  }
+
+  await runForegroundCommand(
+    job,
+    (progress) =>
+      executeReviewRun({
+        cwd,
+        model: options.model,
+        focusText,
+        reviewKind,
+        diffSpec,
+        onProgress: progress
+      }),
+    { json: options.json }
+  );
 }
 
 async function handleTask(argv) {
@@ -842,6 +960,7 @@ async function handleTaskWorker(argv) {
       logFile: storedJob.logFile ?? null
     }
   );
+  const executor = storedJob.jobClass === "review" ? executeReviewRun : executeTaskRun;
   const execution = await runTrackedJob(
     {
       ...storedJob,
@@ -850,7 +969,7 @@ async function handleTaskWorker(argv) {
       eventFile
     },
     () =>
-      executeTaskRun({
+      executor({
         ...request,
         onProgress: progress
       }),
@@ -1006,6 +1125,67 @@ async function handleCancel(argv) {
   outputCommandResult(payload, renderCancelReport(nextJob), options.json);
 }
 
+const DEFAULT_HISTORY_LIMIT = 20;
+const REVIEW_KIND_FILTER = new Set(["review", "adversarial-review"]);
+
+function enrichHistoryJob(workspaceRoot, job) {
+  const enriched = {
+    id: job.id,
+    kind: job.kind,
+    kindLabel: job.kindLabel ?? job.kind,
+    title: job.title ?? null,
+    summary: job.summary ?? null,
+    status: job.status,
+    createdAt: job.createdAt ?? null,
+    completedAt: job.completedAt ?? null,
+    verdict: null,
+    findingsCount: 0,
+    workspaceRoot: job.workspaceRoot ?? workspaceRoot
+  };
+
+  const stored = readStoredJob(enriched.workspaceRoot, job.id);
+  const review = stored?.result?.result;
+  if (review && typeof review === "object") {
+    if (typeof review.verdict === "string") {
+      enriched.verdict = review.verdict;
+    }
+    if (Array.isArray(review.findings)) {
+      enriched.findingsCount = review.findings.length;
+    }
+  }
+  return enriched;
+}
+
+function handleHistory(argv) {
+  const { options } = parseCommandInput(argv, {
+    valueOptions: ["cwd", "limit"],
+    booleanOptions: ["json", "all"]
+  });
+
+  const cwd = resolveCommandCwd(options);
+  const workspaceRoot = resolveCommandWorkspace(options);
+  const limit = Math.max(1, Number(options.limit) || DEFAULT_HISTORY_LIMIT);
+
+  const rawJobs = options.all
+    ? collectWorkspaceJobsAcrossRoots(workspaceRoot)
+    : listJobs(workspaceRoot);
+
+  const reviewJobs = sortJobsNewestFirst(rawJobs).filter((job) => REVIEW_KIND_FILTER.has(job.kind));
+  const sliced = reviewJobs.slice(0, limit);
+  const enriched = sliced.map((job) => enrichHistoryJob(workspaceRoot, job));
+
+  const payload = {
+    workspaceRoot,
+    total: reviewJobs.length,
+    returned: enriched.length,
+    limit,
+    all: Boolean(options.all),
+    jobs: enriched
+  };
+
+  outputCommandResult(payload, renderHistoryReport(payload), options.json);
+}
+
 async function main() {
   const [subcommand, ...argv] = process.argv.slice(2);
   if (!subcommand || subcommand === "help" || subcommand === "--help") {
@@ -1045,6 +1225,12 @@ async function main() {
       break;
     case "observe":
       await handleObserveCommand(argv);
+      break;
+    case "history":
+      handleHistory(argv);
+      break;
+    case "diff":
+      await handleDiff(argv);
       break;
     default:
       throw new Error(`Unknown subcommand: ${subcommand}`);

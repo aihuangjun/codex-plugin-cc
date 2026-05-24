@@ -174,6 +174,24 @@ function pushJobDetails(lines, job, options = {}) {
   }
 }
 
+function appendRescueSuggestion(lines, data, findings) {
+  if (data.verdict !== "needs-attention") {
+    return;
+  }
+  const blocking = findings.filter((f) => f.severity === "critical" || f.severity === "high");
+  if (blocking.length === 0) {
+    return;
+  }
+  const head = blocking[0];
+  const focus = `修复 ${head.file} 中的 ${head.title}${blocking.length > 1 ? `（共 ${blocking.length} 项 critical/high 待修）` : ""}`;
+  lines.push(
+    "",
+    "💡 建议下一步：",
+    `   /codex:rescue --background ${focus.replace(/`/g, "'")}`,
+    "   （在后台让 codex 尝试自动修复；不想自动修复可忽略此提示）"
+  );
+}
+
 function appendReasoningSection(lines, reasoningSummary) {
   if (!Array.isArray(reasoningSummary) || reasoningSummary.length === 0) {
     return;
@@ -291,9 +309,67 @@ export function renderReviewResult(parsedResult, meta) {
     }
   }
 
+  appendRescueSuggestion(lines, data, findings);
   appendReasoningSection(lines, meta.reasoningSummary);
 
   return `${lines.join("\n").trimEnd()}\n`;
+}
+
+function formatHistoryTimestamp(value) {
+  if (!value) {
+    return "—";
+  }
+  try {
+    const iso = new Date(value).toISOString();
+    return iso.slice(0, 19).replace("T", " ");
+  } catch {
+    return String(value);
+  }
+}
+
+function escapeHistoryCell(value) {
+  return String(value ?? "—").replace(/\|/g, "\\|").replace(/\n/g, " ");
+}
+
+export function renderHistoryReport(report) {
+  if (!report || report.jobs.length === 0) {
+    return [
+      "# Codex Review History",
+      "",
+      `Workspace: ${report?.workspaceRoot ?? "—"}`,
+      "",
+      report?.all ? "No review jobs found across all known workspaces." : "No review jobs found for this workspace yet.",
+      ""
+    ].join("\n");
+  }
+
+  const lines = [
+    "# Codex Review History",
+    "",
+    `Workspace: ${report.workspaceRoot}`,
+    `Showing: ${report.returned} of ${report.total}${report.all ? " (across all workspaces)" : ""}`,
+    "",
+    "| When | Kind | Verdict | Findings | Job | Summary |",
+    "|---|---|---|---|---|---|"
+  ];
+
+  for (const job of report.jobs) {
+    const when = formatHistoryTimestamp(job.completedAt ?? job.createdAt);
+    const kindLabel = job.kindLabel ?? job.kind ?? "—";
+    const verdict = job.verdict ?? (job.status === "completed" ? "—" : job.status);
+    const findings = job.findingsCount > 0 ? `${job.findingsCount}` : "0";
+    const summary = job.summary ?? job.title ?? "—";
+    lines.push(
+      `| ${escapeHistoryCell(when)} | ${escapeHistoryCell(kindLabel)} | ${escapeHistoryCell(verdict)} | ${escapeHistoryCell(findings)} | ${escapeHistoryCell(job.id)} | ${escapeHistoryCell(summary)} |`
+    );
+  }
+
+  lines.push(
+    "",
+    "Use `/codex:result <job>` to view the full verdict for any row.",
+    ""
+  );
+  return lines.join("\n");
 }
 
 export function renderTaskResult(parsedResult, meta) {

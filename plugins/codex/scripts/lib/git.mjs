@@ -344,3 +344,80 @@ export function collectReviewContext(cwd, target, options = {}) {
     ...details
   };
 }
+
+function countDiffFileHeaders(diff) {
+  const matches = String(diff).match(/^diff --git /gm);
+  return matches ? matches.length : 0;
+}
+
+function runDiffCommand(cwd, args, label) {
+  const result = git(cwd, args);
+  if (result.status !== 0) {
+    throw new Error(`${formatCommandFailure(["git", ...args], result)} (target: ${label})`);
+  }
+  return result.stdout;
+}
+
+/**
+ * 构造 `/codex:diff` 的 review context。spec 形如：
+ *   { mode: "file", value: "src/foo.js" }
+ *   { mode: "commit", value: "<sha>" }
+ *   { mode: "range", value: "main..HEAD" }
+ * 返回结构与 collectReviewContext 兼容（cwd / target / content / summary / ...）。
+ */
+export function buildDiffReviewContext(cwd, spec) {
+  const repoRoot = getRepoRoot(cwd);
+  const branch = getCurrentBranch(repoRoot);
+
+  let diff;
+  let label;
+  let summary;
+
+  if (spec.mode === "file") {
+    label = `file ${spec.value}`;
+    summary = `Diff of file ${spec.value} vs HEAD`;
+    diff = runDiffCommand(repoRoot, ["diff", "HEAD", "--", spec.value], label);
+    if (!diff.trim()) {
+      diff = runDiffCommand(repoRoot, ["diff", "--cached", "--", spec.value], label);
+    }
+  } else if (spec.mode === "commit") {
+    label = `commit ${spec.value}`;
+    summary = `Diff introduced by ${spec.value}`;
+    diff = runDiffCommand(repoRoot, ["show", "--no-color", spec.value], label);
+  } else if (spec.mode === "range") {
+    if (!/\.\.\.?/.test(spec.value)) {
+      throw new Error(`Invalid --range "${spec.value}". Expected form like "main..HEAD" or "main...feature".`);
+    }
+    label = `range ${spec.value}`;
+    summary = `Diff for ${spec.value}`;
+    diff = runDiffCommand(repoRoot, ["diff", "--no-color", spec.value], label);
+  } else {
+    throw new Error(`Unsupported diff spec mode "${spec.mode}".`);
+  }
+
+  if (!diff.trim()) {
+    throw new Error(`No diff content for ${label}. Nothing to review.`);
+  }
+
+  const content = [
+    `## ${summary}`,
+    "",
+    "```diff",
+    diff.trim(),
+    "```",
+    ""
+  ].join("\n");
+
+  return {
+    cwd: repoRoot,
+    repoRoot,
+    branch,
+    target: { mode: "custom", label, explicit: true },
+    fileCount: countDiffFileHeaders(diff),
+    diffBytes: Buffer.byteLength(diff, "utf8"),
+    inputMode: "inline-diff",
+    collectionGuidance: "",
+    summary,
+    content
+  };
+}

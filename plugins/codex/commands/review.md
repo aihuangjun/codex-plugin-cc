@@ -24,6 +24,7 @@ Parse the line `N files changed, M insertions(+), K deletions(-)`. Compute total
 
 ## Step 3 — Branch on size
 
+<!-- Thresholds defined as SMART_ESTIMATE_THRESHOLDS in plugins/codex/scripts/codex-companion.mjs; keep in sync. -->
 - **Small** (files ≤ 30 AND total ≤ 3000): go directly to **Foreground flow**. Do not ask.
 - **Large** (files > 30 OR total > 3000): use `AskUserQuestion` exactly once with two options (recommended option first, suffixed `(Recommended)`):
   - `Run in background (Recommended)` — for large diffs, foreground will block the conversation for a long time.
@@ -53,14 +54,16 @@ After the command returns:
 
 # Background flow
 
-Call `Bash` exactly once with `run_in_background: true`:
+The companion's `review --background` mode enqueues the work into a detached worker and **immediately prints a launch payload to stdout** that includes the assigned `Job id` and the full set of async-control commands (`/codex:status`, `/codex:observe`, `/codex:result`, `/codex:cancel`). Your job is to surface that payload to the user verbatim.
 
-```typescript
-Bash({
-  command: `node "${CLAUDE_PLUGIN_ROOT}/scripts/codex-companion.mjs" review "$ARGUMENTS"`,
-  description: "Codex review",
-  run_in_background: true
-})
+Call `Bash` **without** `run_in_background` (the companion does the detaching itself, and we need the launch payload back in this turn):
+
+```bash
+node "${CLAUDE_PLUGIN_ROOT}/scripts/codex-companion.mjs" review "$ARGUMENTS"
 ```
 
-After launching, tell the user verbatim: "Codex review started in the background. Use `/codex:status` for progress, or `/codex:observe` in another terminal for a live stream. A PushNotification will fire automatically when it finishes." Do not poll the output and do not wait for completion in this turn.
+After the command returns (it returns within a second — the worker is already detached):
+
+1. Print the command's stdout **verbatim** to the user. It contains the Job id and the four `/codex:<command> <jobId>` lines they need.
+2. Do not paraphrase, summarize, or replace any of those lines with your own wording.
+3. The actual review continues in the detached worker; a `PushNotification` will fire automatically when it finishes.

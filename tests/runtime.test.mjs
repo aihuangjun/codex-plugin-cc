@@ -939,7 +939,7 @@ test("adversarial review rejects staged-only scope to match review target select
   assert.match(result.stderr, /Use one of: auto, working-tree, branch, or pass --base <ref>/i);
 });
 
-test("review accepts --background while still running as a tracked review job", () => {
+test("review --background enqueues a detached worker and immediately returns the launch payload", () => {
   const repo = makeTempDir();
   const binDir = makeTempDir();
   installFakeCodex(binDir);
@@ -956,18 +956,30 @@ test("review accepts --background while still running as a tracked review job", 
 
   assert.equal(launched.status, 0, launched.stderr);
   const launchPayload = JSON.parse(launched.stdout);
-  assert.equal(launchPayload.review, "Review");
-  assert.match(launchPayload.codex.stdout, /No material issues found/);
+  assert.equal(launchPayload.status, "queued");
+  assert.match(launchPayload.jobId, /^review-/);
+  assert.match(launchPayload.title, /Codex Review/);
+  assert.ok(launchPayload.signalFile, "launch payload should include the signalFile path");
 
-  const status = run("node", [SCRIPT, "status"], {
-    cwd: repo,
-    env: buildEnv(binDir)
-  });
+  // worker is detached; poll status until it reaches a terminal state
+  const deadline = Date.now() + 30000;
+  let status = null;
+  while (Date.now() < deadline) {
+    const probe = run("node", [SCRIPT, "status", launchPayload.jobId, "--json"], {
+      cwd: repo,
+      env: buildEnv(binDir)
+    });
+    assert.equal(probe.status, 0, probe.stderr);
+    const payload = JSON.parse(probe.stdout);
+    if (payload.job?.status === "completed" || payload.job?.status === "failed") {
+      status = payload;
+      break;
+    }
+  }
 
-  assert.equal(status.status, 0, status.stderr);
-  assert.match(status.stdout, /# Codex Status/);
-  assert.match(status.stdout, /Codex Review/);
-  assert.match(status.stdout, /completed/);
+  assert.ok(status, "background review job did not reach a terminal state within 30s");
+  assert.equal(status.job.status, "completed");
+  assert.match(status.job.title ?? "", /Codex Review/);
 });
 
 test("status shows phases, hints, and the latest finished job", () => {

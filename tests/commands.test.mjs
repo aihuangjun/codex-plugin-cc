@@ -35,8 +35,7 @@ test("review command estimates diff size and only asks the user when large", () 
   // 前后台流程
   assert.match(source, /```bash/);
   assert.match(source, /node "\$\{CLAUDE_PLUGIN_ROOT\}\/scripts\/codex-companion\.mjs" review "\$ARGUMENTS"/);
-  assert.match(source, /run_in_background:\s*true/);
-  assert.match(source, /description:\s*"Codex review"/);
+  assert.match(source, /detached worker|`--background`/);
   // 流式 + 中文 + 通知
   assert.match(source, /streams `\[codex\] \.\.\.` progress events/i);
   assert.match(source, /Chinese verdict|Simplified Chinese/);
@@ -64,8 +63,7 @@ test("adversarial review command estimates diff size and only asks the user when
   assert.match(source, /Do not summarize, do not announce, do not run any other tool, do not stop/);
   assert.match(source, /```bash/);
   assert.match(source, /node "\$\{CLAUDE_PLUGIN_ROOT\}\/scripts\/codex-companion\.mjs" adversarial-review "\$ARGUMENTS"/);
-  assert.match(source, /run_in_background:\s*true/);
-  assert.match(source, /description:\s*"Codex adversarial review"/);
+  assert.match(source, /detached worker|`--background`/);
   assert.match(source, /streams `\[codex\] \.\.\.` progress events/i);
   assert.match(source, /Chinese verdict|Simplified Chinese/);
   assert.match(source, /verbatim/i);
@@ -80,6 +78,8 @@ test("continue is not exposed as a user-facing command", () => {
   assert.deepEqual(commandFiles, [
     "adversarial-review.md",
     "cancel.md",
+    "diff.md",
+    "history.md",
     "observe.md",
     "rescue.md",
     "result.md",
@@ -158,20 +158,19 @@ test("rescue command absorbs continue semantics", () => {
   assert.match(runtimeSkill, /`--effort`: accepted values are `none`, `minimal`, `low`, `medium`, `high`, `xhigh`/i);
   assert.match(runtimeSkill, /Do not inspect the repository, read files, grep, monitor progress, poll status, fetch results, cancel jobs, summarize output, or do any follow-up work of your own/i);
   assert.match(runtimeSkill, /If the Bash call fails or Codex cannot be invoked, return nothing/i);
-  assert.match(readme, /`codex:codex-rescue` subagent/i);
-  assert.match(readme, /if you do not pass `--model` or `--effort`, Codex chooses its own defaults/i);
-  assert.match(readme, /--model gpt-5\.4-mini --effort medium/i);
-  assert.match(readme, /`spark`, the plugin maps that to `gpt-5\.3-codex-spark`/i);
-  assert.match(readme, /continue a previous Codex task/i);
-  assert.match(readme, /### `\/codex:setup`/);
-  assert.match(readme, /### `\/codex:review`/);
-  assert.match(readme, /### `\/codex:adversarial-review`/);
-  assert.match(readme, /uses the same review target selection as `\/codex:review`/i);
-  assert.match(readme, /--base main challenge whether this was the right caching and retry design/);
-  assert.match(readme, /### `\/codex:rescue`/);
-  assert.match(readme, /### `\/codex:status`/);
-  assert.match(readme, /### `\/codex:result`/);
-  assert.match(readme, /### `\/codex:cancel`/);
+  // Fork README is intentionally different from the upstream; only require that
+  // every user-facing command is mentioned in it so the README stays in sync as
+  // commands are added or removed.
+  assert.match(readme, /\/codex:setup/);
+  assert.match(readme, /\/codex:review/);
+  assert.match(readme, /\/codex:adversarial-review/);
+  assert.match(readme, /\/codex:diff/);
+  assert.match(readme, /\/codex:rescue/);
+  assert.match(readme, /\/codex:status/);
+  assert.match(readme, /\/codex:observe/);
+  assert.match(readme, /\/codex:result/);
+  assert.match(readme, /\/codex:cancel/);
+  assert.match(readme, /\/codex:history/);
 });
 
 test("result and cancel commands are exposed as deterministic runtime entrypoints", () => {
@@ -212,14 +211,9 @@ test("hooks keep session-end cleanup and stop gating enabled", () => {
 
 test("setup command can offer Codex install and still points users to codex login", () => {
   const setup = read("commands/setup.md");
-  const readme = fs.readFileSync(path.join(ROOT, "README.md"), "utf8");
 
   assert.match(setup, /argument-hint:\s*'\[--enable-review-gate\|--disable-review-gate\]'/);
   assert.match(setup, /AskUserQuestion/);
   assert.match(setup, /npm install -g @openai\/codex/);
   assert.match(setup, /codex-companion\.mjs" setup --json \$ARGUMENTS/);
-  assert.match(readme, /!codex login/);
-  assert.match(readme, /offer to install Codex for you/i);
-  assert.match(readme, /\/codex:setup --enable-review-gate/);
-  assert.match(readme, /\/codex:setup --disable-review-gate/);
 });

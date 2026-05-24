@@ -15,7 +15,21 @@ Execution mode:
 
 - If the request includes `--background`, run the `codex:codex-rescue` subagent in the background using `run_in_background: true`, then set up completion monitoring:
   1. Parse the subagent's JSON output to extract `jobId`, `jobsDir`, and `signalFile`.
-  2. Set up a completion watcher using the `Monitor` tool so the main thread is notified when the background worker finishes:
+  2. **Immediately surface the launch info to the user** (before the Monitor setup) so they know what to use to track progress:
+     ```
+     Codex rescue task started in the background.
+       Job id: <jobId>
+
+     Async control:
+       /codex:status <jobId>     — current state, phase, recent progress
+       /codex:observe <jobId>    — live event stream (read-only, Ctrl+C exits observer only)
+       /codex:result <jobId>     — full final output (once status is completed/failed)
+       /codex:cancel <jobId>     — abort the run
+
+     A PushNotification will fire automatically when it finishes.
+     ```
+     Replace `<jobId>` with the real value from step 1. If the subagent already printed a similar block in its stdout, you may forward that verbatim instead of re-typing it.
+  3. Set up a completion watcher using the `Monitor` tool so the main thread is notified when the background worker finishes:
      ```
      Monitor:
        command: until [ -f "<signalFile>" ]; do sleep 2; done; echo "done $(cat <signalFile>)"
@@ -24,12 +38,12 @@ Execution mode:
        persistent: false
      ```
      Replace `<signalFile>` and `<jobId>` with the actual values from step 1.
-  3. When the Monitor fires (the worker wrote the `.done` signal file), call `PushNotification` to wake the main thread:
+  4. When the Monitor fires (the worker wrote the `.done` signal file), call `PushNotification` to wake the main thread:
      ```
      PushNotification: "Codex task <jobId> finished: <status>. Run /codex:result <jobId> to see output."
      ```
      Extract `<status>` from the Monitor output line (`completed` or `failed`).
-  4. Do not skip the Monitor setup. Do not poll `/codex:status` manually — rely on the Monitor to detect completion.
+  5. Do not skip the Monitor setup. Do not poll `/codex:status` manually — rely on the Monitor to detect completion.
 - If the request includes `--wait`, run the `codex:codex-rescue` subagent in the foreground.
 - If neither flag is present, default to foreground.
 - `--background` and `--wait` are execution flags for Claude Code. Do not forward them to `task`, and do not treat them as part of the natural-language task text.
