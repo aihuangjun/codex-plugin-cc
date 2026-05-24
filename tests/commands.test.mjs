@@ -73,6 +73,19 @@ test("adversarial review command estimates diff size and only asks the user when
   assert.match(source, /adversarial framing/i);
 });
 
+test("observe command runs companion in snapshot mode as its first action", () => {
+  const source = read("commands/observe.md");
+  // 允许工具收紧：只需要 Bash(node:*)
+  assert.match(source, /allowed-tools:\s*Bash\(node:\*\)/);
+  // 第一动作必须是 Bash，不能只是给提示
+  assert.match(source, /You MUST invoke the `Bash` tool \*\*as the very next action on this turn\*\*/);
+  // snapshot 调用模板
+  assert.match(source, /node "\$\{CLAUDE_PLUGIN_ROOT\}\/scripts\/codex-companion\.mjs" observe --snapshot \$ARGUMENTS/);
+  // 文档里也要保留 live 流的回退方案
+  assert.match(source, /open a separate terminal/i);
+  assert.match(source, /`Ctrl\+C` only detaches the observer/i);
+});
+
 test("continue is not exposed as a user-facing command", () => {
   const commandFiles = fs.readdirSync(path.join(PLUGIN_ROOT, "commands")).sort();
   assert.deepEqual(commandFiles, [

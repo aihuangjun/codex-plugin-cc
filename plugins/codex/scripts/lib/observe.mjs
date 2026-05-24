@@ -274,7 +274,7 @@ export function tailEventStream(eventFile, onEvent) {
 export async function handleObserveCommand(argv) {
   const { options, positionals } = parseArgs(argv, {
     valueOptions: ["cwd"],
-    booleanOptions: ["json"]
+    booleanOptions: ["json", "snapshot"]
   });
 
   const cwd = options.cwd ?? process.cwd();
@@ -322,11 +322,16 @@ export async function handleObserveCommand(argv) {
   }
   process.stdout.write("\n");
 
-  if (isCompleted) {
-    // Render full history and exit
+  // Snapshot mode: dump everything observed so far and exit, regardless of
+  // whether the job is still running. Used by the /codex:observe slash command
+  // so the main conversation gets an immediate event replay without blocking
+  // on a long-running tail.
+  if (isCompleted || options.snapshot) {
     const { events } = readEventsFromOffset(eventFile, 0);
     if (events.length === 0) {
-      process.stdout.write(`${ANSI.dim}No events recorded for this job.${ANSI.reset}\n`);
+      process.stdout.write(
+        `${ANSI.dim}No events recorded yet for this job${isCompleted ? "" : " (still starting up — try again in a moment)"}.${ANSI.reset}\n`
+      );
     } else {
       for (const event of events) {
         const rendered = renderEvent(event);
@@ -334,6 +339,11 @@ export async function handleObserveCommand(argv) {
           process.stdout.write(`${rendered}\n`);
         }
       }
+    }
+    if (!isCompleted && options.snapshot) {
+      process.stdout.write(
+        `\n${ANSI.dim}--- snapshot end. Job is still ${job.status}; rerun /codex:observe ${job.id} for the latest events, or run \`node "${"${CLAUDE_PLUGIN_ROOT}"}/scripts/codex-companion.mjs" observe ${job.id}\` in another terminal for a live stream.${ANSI.reset}\n`
+      );
     }
     return;
   }

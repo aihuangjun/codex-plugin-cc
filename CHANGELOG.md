@@ -10,6 +10,13 @@ For end-user installation and verification scenarios, see [`docs/CHANGES_AND_USA
 
 ## [Unreleased]
 
+_No unreleased changes yet. New entries land here during the next development cycle and roll into the next tagged version on release._
+
+## [2.0.3] — 2026-05-24
+
+### Fixed
+- **`/codex:observe` actually runs now.** The dragon-inherited template only printed a "copy this command into a new terminal" hint without invoking `Bash`, so the slash command did nothing. The companion's `observe` subcommand now accepts `--snapshot` (dump everything in `.events.jsonl` so far and exit, even if the job is still running), and the slash-command template calls `Bash` as its first action. The main conversation gets an immediate ANSI-rendered event replay, plus a footer telling persistent-live-tail users how to open a separate terminal.
+
 ### Added
 - **`npm run release`** (`scripts/release.mjs`) — tag + push + GitHub Release creation for the current `package.json` version. Reads release notes from the matching CHANGELOG section, refuses to run on a dirty tree, refuses if the tag already exists. Supports `--dry-run` and `--repo owner/repo`.
 
