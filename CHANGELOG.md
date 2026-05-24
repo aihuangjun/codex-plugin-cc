@@ -15,7 +15,10 @@ _No unreleased changes yet. New entries land here during the next development cy
 ## [2.0.3] — 2026-05-24
 
 ### Fixed
-- **`/codex:observe` actually runs now.** The dragon-inherited template only printed a "copy this command into a new terminal" hint without invoking `Bash`, so the slash command did nothing. The companion's `observe` subcommand now accepts `--snapshot` (dump everything in `.events.jsonl` so far and exit, even if the job is still running), and the slash-command template calls `Bash` as its first action. The main conversation gets an immediate ANSI-rendered event replay, plus a footer telling persistent-live-tail users how to open a separate terminal.
+- **`/codex:observe` actually runs now.** The dragon-inherited template only printed a "copy this command into a new terminal" hint without invoking `Bash`, so the slash command did nothing. New behavior: as its first action the command calls `AskUserQuestion` with two options — (A) **Run inline here** invokes the companion via `Bash` in this conversation (immediate for completed jobs; blocks until completion or `Ctrl+C` for running jobs, since Claude Code's main pane is batch-rendered), or (B) **Print copy-paste command for a fresh terminal** prints the exact `node ... observe ...` command for a separate terminal where the user gets a true real-time ANSI-colored stream that doesn't block this chat. The companion still also accepts `--snapshot` (dump-and-exit) as an advanced flag, but the slash command no longer auto-uses it — the user chooses.
+
+### Added
+- **Project-level `CLAUDE.md`**: documents that any push / tag / `gh release` / `npm publish` / branch-history-rewriting action must go through `AskUserQuestion` first — added after a `v2.0.3` release was tagged and pushed without user confirmation.
 
 ### Added
 - **`npm run release`** (`scripts/release.mjs`) — tag + push + GitHub Release creation for the current `package.json` version. Reads release notes from the matching CHANGELOG section, refuses to run on a dirty tree, refuses if the tag already exists. Supports `--dry-run` and `--repo owner/repo`.

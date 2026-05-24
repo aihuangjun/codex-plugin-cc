@@ -73,17 +73,20 @@ test("adversarial review command estimates diff size and only asks the user when
   assert.match(source, /adversarial framing/i);
 });
 
-test("observe command runs companion in snapshot mode as its first action", () => {
+test("observe command asks the user inline-vs-new-terminal before running", () => {
   const source = read("commands/observe.md");
-  // 允许工具收紧：只需要 Bash(node:*)
-  assert.match(source, /allowed-tools:\s*Bash\(node:\*\)/);
-  // 第一动作必须是 Bash，不能只是给提示
-  assert.match(source, /You MUST invoke the `Bash` tool \*\*as the very next action on this turn\*\*/);
-  // snapshot 调用模板
-  assert.match(source, /node "\$\{CLAUDE_PLUGIN_ROOT\}\/scripts\/codex-companion\.mjs" observe --snapshot \$ARGUMENTS/);
-  // 文档里也要保留 live 流的回退方案
-  assert.match(source, /open a separate terminal/i);
-  assert.match(source, /`Ctrl\+C` only detaches the observer/i);
+  // 工具集应包含 AskUserQuestion + Bash(node:*)
+  assert.match(source, /allowed-tools:\s*Bash\(node:\*\),\s*AskUserQuestion/);
+  // 第一动作必须是 AskUserQuestion，不能默认替用户挑
+  assert.match(source, /You MUST invoke `AskUserQuestion` \*\*as the very next action on this turn\*\*/);
+  // 两个选项的标签必须精确出现
+  assert.match(source, /label:\s*`Run inline here`/);
+  assert.match(source, /label:\s*`Print copy-paste command for a fresh terminal`/);
+  // inline 分支必须用 Bash 调底层 observe（不带 --snapshot）
+  assert.match(source, /node "\$\{CLAUDE_PLUGIN_ROOT\}\/scripts\/codex-companion\.mjs" observe \$ARGUMENTS/);
+  // copy-paste 分支必须解释好处
+  assert.match(source, /真正的实时事件流/);
+  assert.match(source, /Codex 任务继续运行/);
 });
 
 test("continue is not exposed as a user-facing command", () => {
