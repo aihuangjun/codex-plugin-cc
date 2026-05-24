@@ -136,7 +136,7 @@ test("setup reports not ready when app-server config read fails", () => {
   assert.match(payload.auth.detail, /config\/read failed for cwd/);
 });
 
-test("review renders a no-findings result from app-server review/start", () => {
+test("review renders a no-findings result from a structured review turn", () => {
   const repo = makeTempDir();
   const binDir = makeTempDir();
   installFakeCodex(binDir);
@@ -153,7 +153,8 @@ test("review renders a no-findings result from app-server review/start", () => {
   });
 
   assert.equal(result.status, 0);
-  assert.match(result.stdout, /Reviewed uncommitted changes/);
+  assert.match(result.stdout, /Target: working tree diff/);
+  assert.match(result.stdout, /Verdict: approve/);
   assert.match(result.stdout, /No material issues found/);
 });
 
@@ -228,7 +229,8 @@ test("review accepts the quoted raw argument style for built-in base-branch revi
   });
 
   assert.equal(result.status, 0);
-  assert.match(result.stdout, /Reviewed changes against main/);
+  assert.match(result.stdout, /Target: branch diff against main/);
+  assert.match(result.stdout, /Verdict: approve/);
   assert.match(result.stdout, /No material issues found/);
 });
 
@@ -317,7 +319,7 @@ test("review includes reasoning output when the app server returns it", () => {
 
   assert.equal(result.status, 0, result.stderr);
   assert.match(result.stdout, /Reasoning:/);
-  assert.match(result.stdout, /Reviewed the changed files and checked the likely regression paths first|Reviewed the changed files and checked the likely regression paths/i);
+  assert.match(result.stdout, /Inspected the prompt, gathered evidence, and checked the highest-risk paths first/);
 });
 
 test("review logs reasoning summaries and review output to the job log", () => {
@@ -340,9 +342,9 @@ test("review logs reasoning summaries and review output to the job log", () => {
   const state = JSON.parse(fs.readFileSync(path.join(stateDir, "state.json"), "utf8"));
   const log = fs.readFileSync(state.jobs[0].logFile, "utf8");
   assert.match(log, /Reasoning summary/);
-  assert.match(log, /Reviewed the changed files and checked the likely regression paths/);
-  assert.match(log, /Review output/);
-  assert.match(log, /Reviewed uncommitted changes\./);
+  assert.match(log, /Inspected the prompt, gathered evidence, and checked the highest-risk paths first/);
+  assert.match(log, /Assistant message/);
+  assert.match(log, /No material issues found/);
 });
 
 test("task --resume-last resumes the latest persisted task thread", () => {
@@ -833,7 +835,51 @@ test("task --background enqueues a detached worker and exposes per-job status", 
   assert.match(resultPayload.storedJob.rendered, /Handled the requested task/);
 });
 
-test("review rejects focus text because it is native-review only", () => {
+test("task --background writes a .done signal file on completion for Monitor-based notification", async () => {
+  const repo = makeTempDir();
+  const binDir = makeTempDir();
+  installFakeCodex(binDir, "slow-task");
+  initGitRepo(repo);
+  fs.writeFileSync(path.join(repo, "README.md"), "hello\n");
+  run("git", ["add", "README.md"], { cwd: repo });
+  run("git", ["commit", "-m", "init"], { cwd: repo });
+
+  const launched = run("node", [SCRIPT, "task", "--background", "--json", "investigate the failing test"], {
+    cwd: repo,
+    env: buildEnv(binDir)
+  });
+
+  assert.equal(launched.status, 0, launched.stderr);
+  const launchPayload = JSON.parse(launched.stdout);
+  assert.equal(launchPayload.status, "queued");
+  assert.ok(launchPayload.signalFile, "launch payload must include signalFile");
+  assert.ok(launchPayload.jobsDir, "launch payload must include jobsDir");
+  assert.equal(launchPayload.signalFile, path.join(launchPayload.jobsDir, `${launchPayload.jobId}.done`));
+
+  // The signal file should not exist yet (task is still running).
+  assert.equal(fs.existsSync(launchPayload.signalFile), false, "signal file must not exist before completion");
+
+  // Wait for the background worker to finish.
+  const waitedStatus = run(
+    "node",
+    [SCRIPT, "status", launchPayload.jobId, "--wait", "--timeout-ms", "15000", "--json"],
+    {
+      cwd: repo,
+      env: buildEnv(binDir)
+    }
+  );
+  assert.equal(waitedStatus.status, 0, waitedStatus.stderr);
+  const waitedPayload = JSON.parse(waitedStatus.stdout);
+  assert.equal(waitedPayload.job.status, "completed");
+
+  // The signal file should now exist and contain the completion marker.
+  await waitFor(() => fs.existsSync(launchPayload.signalFile));
+  const signalContent = fs.readFileSync(launchPayload.signalFile, "utf8");
+  assert.match(signalContent, /completed/);
+  assert.match(signalContent, new RegExp(launchPayload.jobId));
+});
+
+test("review accepts focus text and forwards it into the review prompt", () => {
   const repo = makeTempDir();
   const binDir = makeTempDir();
   installFakeCodex(binDir);
@@ -848,12 +894,10 @@ test("review rejects focus text because it is native-review only", () => {
     env: buildEnv(binDir)
   });
 
-  assert.equal(result.status > 0, true);
-  assert.match(result.stderr, /does not support custom focus text/i);
-  assert.match(result.stderr, /\/codex:adversarial-review focus on auth/i);
+  assert.equal(result.status, 0, result.stderr);
 });
 
-test("review rejects staged-only scope because it is native-review only", () => {
+test("review rejects staged-only scope", () => {
   const repo = makeTempDir();
   const binDir = makeTempDir();
   installFakeCodex(binDir);

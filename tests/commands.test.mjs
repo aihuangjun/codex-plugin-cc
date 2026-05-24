@@ -14,6 +14,7 @@ function read(relativePath) {
 test("review command uses AskUserQuestion and background Bash while staying review-only", () => {
   const source = read("commands/review.md");
   assert.match(source, /AskUserQuestion/);
+  assert.match(source, /PushNotification/);
   assert.match(source, /\bBash\(/);
   assert.match(source, /Do not fix issues/i);
   assert.match(source, /review-only/i);
@@ -21,11 +22,11 @@ test("review command uses AskUserQuestion and background Bash while staying revi
   assert.match(source, /```bash/);
   assert.match(source, /```typescript/);
   assert.match(source, /review "\$ARGUMENTS"/);
-  assert.match(source, /\[--scope auto\|working-tree\|branch\]/);
+  assert.match(source, /\[--scope auto\|working-tree\|branch\] \[focus \.\.\.\]/);
   assert.match(source, /run_in_background:\s*true/);
   assert.match(source, /command:\s*`node "\$\{CLAUDE_PLUGIN_ROOT\}\/scripts\/codex-companion\.mjs" review "\$ARGUMENTS"`/);
   assert.match(source, /description:\s*"Codex review"/);
-  assert.match(source, /Do not call `BashOutput`/);
+  assert.match(source, /Do not poll the output/i);
   assert.match(source, /Return the command stdout verbatim, exactly as-is/i);
   assert.match(source, /git status --short --untracked-files=all/);
   assert.match(source, /git diff --shortstat/);
@@ -33,15 +34,18 @@ test("review command uses AskUserQuestion and background Bash while staying revi
   assert.match(source, /Recommend waiting only when the review is clearly tiny, roughly 1-2 files total/i);
   assert.match(source, /In every other case, including unclear size, recommend background/i);
   assert.match(source, /The companion script parses `--wait` and `--background`/i);
-  assert.match(source, /Claude Code's `Bash\(..., run_in_background: true\)` is what actually detaches the run/i);
   assert.match(source, /When in doubt, run the review/i);
   assert.match(source, /\(Recommended\)/);
-  assert.match(source, /does not support staged-only review, unstaged-only review, or extra focus text/i);
+  // streaming + Chinese output + completion notification additions
+  assert.match(source, /streams `\[codex\] \.\.\.` progress events/i);
+  assert.match(source, /Simplified Chinese/);
+  assert.match(source, /PushNotification\(\{/);
 });
 
 test("adversarial review command uses AskUserQuestion and background Bash while staying review-only", () => {
   const source = read("commands/adversarial-review.md");
   assert.match(source, /AskUserQuestion/);
+  assert.match(source, /PushNotification/);
   assert.match(source, /\bBash\(/);
   assert.match(source, /Do not fix issues/i);
   assert.match(source, /review-only/i);
@@ -53,7 +57,7 @@ test("adversarial review command uses AskUserQuestion and background Bash while 
   assert.match(source, /run_in_background:\s*true/);
   assert.match(source, /command:\s*`node "\$\{CLAUDE_PLUGIN_ROOT\}\/scripts\/codex-companion\.mjs" adversarial-review "\$ARGUMENTS"`/);
   assert.match(source, /description:\s*"Codex adversarial review"/);
-  assert.match(source, /Do not call `BashOutput`/);
+  assert.match(source, /Do not poll the output/i);
   assert.match(source, /Return the command stdout verbatim, exactly as-is/i);
   assert.match(source, /git status --short --untracked-files=all/);
   assert.match(source, /git diff --shortstat/);
@@ -61,13 +65,16 @@ test("adversarial review command uses AskUserQuestion and background Bash while 
   assert.match(source, /Recommend waiting only when the scoped review is clearly tiny, roughly 1-2 files total/i);
   assert.match(source, /In every other case, including unclear size, recommend background/i);
   assert.match(source, /The companion script parses `--wait` and `--background`/i);
-  assert.match(source, /Claude Code's `Bash\(..., run_in_background: true\)` is what actually detaches the run/i);
   assert.match(source, /When in doubt, run the review/i);
   assert.match(source, /\(Recommended\)/);
   assert.match(source, /uses the same review target selection as `\/codex:review`/i);
   assert.match(source, /supports working-tree review, branch review, and `--base <ref>`/i);
   assert.match(source, /does not support `--scope staged` or `--scope unstaged`/i);
   assert.match(source, /can still take extra focus text after the flags/i);
+  // streaming + Chinese output + completion notification additions
+  assert.match(source, /streams `\[codex\] \.\.\.` progress events/i);
+  assert.match(source, /Simplified Chinese/);
+  assert.match(source, /PushNotification\(\{/);
 });
 
 test("continue is not exposed as a user-facing command", () => {
@@ -75,6 +82,7 @@ test("continue is not exposed as a user-facing command", () => {
   assert.deepEqual(commandFiles, [
     "adversarial-review.md",
     "cancel.md",
+    "observe.md",
     "rescue.md",
     "result.md",
     "review.md",

@@ -60,8 +60,7 @@ function buildThreadParams(cwd, options = {}) {
     approvalPolicy: options.approvalPolicy ?? "never",
     sandbox: options.sandbox ?? "read-only",
     serviceName: SERVICE_NAME,
-    ephemeral: options.ephemeral ?? true,
-    experimentalRawEvents: false
+    ephemeral: options.ephemeral ?? true
   };
 }
 
@@ -903,62 +902,6 @@ export async function interruptAppServerTurn(cwd, { threadId, turnId }) {
   } finally {
     await client?.close().catch(() => {});
   }
-}
-
-export async function runAppServerReview(cwd, options = {}) {
-  const availability = getCodexAvailability(cwd);
-  if (!availability.available) {
-    throw new Error("Codex CLI is not installed or is missing required runtime support. Install it with `npm install -g @openai/codex`, then rerun `/codex:setup`.");
-  }
-
-  return withAppServer(cwd, async (client) => {
-    emitProgress(options.onProgress, "Starting Codex review thread.", "starting");
-    const thread = await startThread(client, cwd, {
-      model: options.model,
-      sandbox: "read-only",
-      ephemeral: true,
-      threadName: options.threadName
-    });
-    const sourceThreadId = thread.thread.id;
-    emitProgress(options.onProgress, `Thread ready (${sourceThreadId}).`, "starting", {
-      threadId: sourceThreadId
-    });
-    const delivery = options.delivery ?? "inline";
-
-    const turnState = await captureTurn(
-      client,
-      sourceThreadId,
-      () =>
-        client.request("review/start", {
-          threadId: sourceThreadId,
-          delivery,
-          target: options.target
-        }),
-      {
-        onProgress: options.onProgress,
-        onResponse(response, state) {
-          if (response.reviewThreadId) {
-            state.threadIds.add(response.reviewThreadId);
-            if (delivery === "detached") {
-              state.threadId = response.reviewThreadId;
-            }
-          }
-        }
-      }
-    );
-
-    return {
-      status: buildResultStatus(turnState),
-      threadId: turnState.threadId,
-      sourceThreadId,
-      turnId: turnState.turnId,
-      reviewText: turnState.reviewText,
-      reasoningSummary: turnState.reasoningSummary,
-      turn: turnState.finalTurn,
-      error: turnState.error,
-      stderr: cleanCodexStderr(client.stderr)
-    };
-  });
 }
 
 export async function runAppServerTurn(cwd, options = {}) {
