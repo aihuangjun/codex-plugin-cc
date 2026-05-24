@@ -1,62 +1,60 @@
 ---
-description: Run a Codex code review against local git state (streaming progress, Chinese output, completion notification)
-argument-hint: '[--wait|--background] [--base <ref>] [--scope auto|working-tree|branch] [focus ...]'
+description: Run a Codex code review against local git state (smart size estimate, streaming progress, Chinese output, completion notification)
+argument-hint: '[--background] [--base <ref>] [--scope auto|working-tree|branch] [focus ...]'
 disable-model-invocation: true
-allowed-tools: Read, Glob, Grep, Bash(node:*), Bash(git:*), AskUserQuestion, PushNotification
+allowed-tools: Bash(node:*), Bash(git diff --shortstat:*), Bash(git status --short:*), AskUserQuestion, PushNotification
 ---
 
-Run a Codex review through the shared plugin runtime.
-Codex returns a structured verdict (`verdict`, `summary`, `findings`, `recommendations`, `next_steps`). Natural-language fields are emitted in **Simplified Chinese**; the JSON enum values (`approve` / `needs-attention`, `critical` / `high` / `medium` / `low`) and code identifiers stay in their original form.
+Your single job on this turn is to start the Codex review and stream its output back to the user.
 
-Raw slash-command arguments:
+# Decision flow (execute in order, each step is mandatory)
+
+## Step 1 — Fast path on explicit flag
+
+- If `$ARGUMENTS` contains the literal substring `--background`, go directly to **Background flow**. Do not estimate, do not ask.
+
+## Step 2 — Estimate diff size (ONE Bash call only)
+
+Run exactly **one** Bash call to size the change. Do not run multiple git commands here.
+
+- For working-tree review (default): `git diff --shortstat`
+- If `--base <ref>` is in `$ARGUMENTS`: `git diff --shortstat <ref>...HEAD`
+
+Parse the line `N files changed, M insertions(+), K deletions(-)`. Compute total = M + K. If parsing fails, treat as small.
+
+## Step 3 — Branch on size
+
+- **Small** (files ≤ 30 AND total ≤ 3000): go directly to **Foreground flow**. Do not ask.
+- **Large** (files > 30 OR total > 3000): use `AskUserQuestion` exactly once with two options (recommended option first, suffixed `(Recommended)`):
+  - `Run in background (Recommended)` — for large diffs, foreground will block the conversation for a long time.
+  - `Run in foreground`
+
+  After the user answers, **the very next action on this turn is the corresponding `Bash` call below**. Do not summarize, do not announce, do not run any other tool, do not stop.
+
+# Raw arguments
 `$ARGUMENTS`
 
-Core constraint:
-- This command is review-only.
-- Do not fix issues, apply patches, or suggest that you are about to make changes.
-- Your only job is to run the review and return Codex's output verbatim to the user.
-- Codex already produces Chinese natural-language output. Do not translate, paraphrase, or re-summarize it.
+# Foreground flow
 
-Execution mode rules:
-- If the raw arguments include `--wait`, do not ask. Run the review in the foreground.
-- If the raw arguments include `--background`, do not ask. Run the review in a Claude background task.
-- Otherwise, estimate the review size before asking:
-  - For working-tree review, start with `git status --short --untracked-files=all`.
-  - For working-tree review, also inspect both `git diff --shortstat --cached` and `git diff --shortstat`.
-  - For base-branch review, use `git diff --shortstat <base>...HEAD`.
-  - Treat untracked files or directories as reviewable work even when `git diff --shortstat` is empty.
-  - Only conclude there is nothing to review when the relevant working-tree status is empty or the explicit branch diff is empty.
-  - Recommend waiting only when the review is clearly tiny, roughly 1-2 files total and no sign of a broader directory-sized change.
-  - In every other case, including unclear size, recommend background.
-  - When in doubt, run the review instead of declaring that there is nothing to review.
-- Then use `AskUserQuestion` exactly once with two options, putting the recommended option first and suffixing its label with `(Recommended)`:
-  - `Wait for results`
-  - `Run in background`
+Call `Bash` exactly once with this command. Do NOT redirect stderr; the companion streams `[codex] ...` progress events there in real time so the user can see what Codex is doing while it works.
 
-Argument handling:
-- Preserve the user's arguments exactly.
-- Do not strip `--wait` or `--background` yourself.
-- Do not add extra review instructions or rewrite the user's intent.
-- The companion script parses `--wait` and `--background`, but Claude Code's `Bash(..., run_in_background: true)` is what actually detaches the run.
-- `/codex:review` accepts an optional focus text after the flags. If the user wants a more adversarial framing, suggest `/codex:adversarial-review` instead.
-
-Foreground flow:
-- Run (do NOT silence stderr — the companion streams `[codex] ...` progress events there so the user can see what Codex is doing while it works):
 ```bash
 node "${CLAUDE_PLUGIN_ROOT}/scripts/codex-companion.mjs" review "$ARGUMENTS"
 ```
-- Return the command stdout verbatim, exactly as-is.
-- Do not paraphrase, summarize, or add commentary before or after it.
-- Do not fix any issues mentioned in the review output.
-- After the review result has been shown to the user, call `PushNotification` to signal completion:
-```typescript
-PushNotification({
-  message: "Codex review finished — see the verdict above."
-})
-```
 
-Background flow:
-- Launch the review with `Bash` in the background:
+After the command returns:
+
+1. Return its stdout **verbatim**, exactly as-is — Codex emits a structured Chinese verdict (`verdict`, `summary`, `findings`, `recommendations`, `next_steps`); JSON enum values (`approve` / `needs-attention`, `critical` / `high` / `medium` / `low`) and code identifiers stay in their original form. Do not paraphrase, summarize, translate, or add commentary before or after it.
+2. Call `PushNotification`:
+   ```typescript
+   PushNotification({ message: "Codex review finished — see the verdict above." })
+   ```
+3. Do not fix any issues mentioned in the review output. This command is review-only.
+
+# Background flow
+
+Call `Bash` exactly once with `run_in_background: true`:
+
 ```typescript
 Bash({
   command: `node "${CLAUDE_PLUGIN_ROOT}/scripts/codex-companion.mjs" review "$ARGUMENTS"`,
@@ -64,6 +62,5 @@ Bash({
   run_in_background: true
 })
 ```
-- Do not poll the output or wait for completion in this turn.
-- After launching the command, tell the user: "Codex review started in the background. Check `/codex:status` for progress, or run `/codex:observe` in another terminal to watch it live. A PushNotification will fire automatically when it finishes."
-- When the background job completes the plugin emits a signal file that triggers PushNotification, so no manual polling is required.
+
+After launching, tell the user verbatim: "Codex review started in the background. Use `/codex:status` for progress, or `/codex:observe` in another terminal for a live stream. A PushNotification will fire automatically when it finishes." Do not poll the output and do not wait for completion in this turn.

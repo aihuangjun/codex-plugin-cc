@@ -1,11 +1,34 @@
 # codex-plugin-cc-opt：变更说明与验证指南
 
+## v2.0.1 紧急修复（2026-05-23）
+
+**2.0.0 的问题**：在大 diff（>50 文件 / >10k 行）场景下，`/codex:review` 与 `/codex:adversarial-review` 在用户回答推荐弹窗 `Wait for results` 之后 **不会真正启动 review** —— `/codex:status` 显示无 job 在跑，用户看不到任何 `[codex] ...` 流式输出。
+
+**根因**：上游 1.0.4 模板带的 "估算 diff 大小 → AskUserQuestion → 走前台/后台流程" 三段式 ceremony，估算阶段跑了 `git status` + 多次 `git diff --shortstat`（其中一次跑得很慢），把 Claude 的 context 占满，回答弹窗后 Claude 误以为任务已结束，遗漏了最关键的 `Bash(node ... review)` 调用。
+
+**修复（smart estimate 方案）**：把两个命令模板改成"分支式决策流"。
+
+1. **Step 1 — Fast path on explicit flag**：如果用户传了 `--background`，跳过一切直接走后台。
+2. **Step 2 — Estimate diff size (ONE Bash call only)**：只跑**一条** `git diff --shortstat`（或 `--base` 指定的 ref-diff），解析 `N files changed, M insertions, K deletions`。这一限制避免了 2.0.0 估算阶段 3+ 个 git 命令叠加占满 context 的根因。
+3. **Step 3 — Branch on size**：
+   - **小 diff**（files ≤ 30 AND total 行 ≤ 3000）→ **直接前台跑**，不问。
+   - **大 diff**（files > 30 OR total > 3000）→ AskUserQuestion 推荐用户走后台（避免长时间阻塞对话）。问答后**强约束**：下一个动作必须是对应的 `Bash` 调用，不准 summarize、不准 announce、不准 stop。
+
+`allowed-tools` 收紧到 `Bash(node:*), Bash(git diff --shortstat:*), Bash(git status --short:*), AskUserQuestion, PushNotification` —— 移除了 `Read`/`Glob`/`Grep` 和宽松的 `Bash(git:*)`，把"误启其它工具走神"的机会降到最低。
+
+**用户侧的体验变化**：
+- 小改动直接跑，无任何弹窗 ceremony。
+- 大改动（>30 文件或 >3000 行）会问一次"前台 / 后台"，**推荐后台**。后台可用 `/codex:observe` 实时看流。
+- 想跳过弹窗直接后台跑：`/codex:review --background`。
+
+---
+
 > 本仓库是 [`openai/codex-plugin-cc`](https://github.com/openai/codex-plugin-cc) 的优化分叉。
 > 在上游 1.0.4 的基础上：
 > 1. 合入了 [`dragon84867/codex-plugin-cc`](https://github.com/dragon84867/codex-plugin-cc) 1.2.6 已修复的多项底层 bug 与新增能力；
 > 2. 自行重构了 `/codex:review` 与 `/codex:adversarial-review`，让它们**过程可见、结果中文、跑完通知**。
 >
-> 版本号：**2.0.0**
+> 版本号：**2.0.1**
 > Marketplace 名：`openai-codex-opt`（可与官方版 `openai-codex`、dragon 版 `dragon-cc-codex` 共存）
 > 插件本体名（用于安装）：`codex`
 
@@ -107,14 +130,16 @@ Claude Code 的 marketplace 是去中心化的：没有中央目录，公开 Git
 **指令**：
 
 ```text
-/codex:review --wait
+/codex:review
 ```
 
 或带 focus 文本：
 
 ```text
-/codex:review --wait 重点看认证和会话管理
+/codex:review 重点看认证和会话管理
 ```
+
+> 默认前台跑，stderr 流式打 `[codex] ...`。想后台跑加 `--background`。
 
 **期望**：
 - Claude Code 主界面流式打印 `[codex] Starting Codex task thread.` → `Thread ready (...)` → `Turn started (...)` → 可能还有 `Running command: ...`、`Reasoning summary captured: ...`、`Assistant message captured: ...`、`Turn completion inferred`。每一行间隔几百毫秒到几秒不等，能感觉到"在动"。
@@ -126,7 +151,7 @@ Claude Code 的 marketplace 是去中心化的：没有中央目录，公开 Git
 **指令**：
 
 ```text
-/codex:adversarial-review --wait 这种缓存设计在并发场景会不会出问题
+/codex:adversarial-review 这种缓存设计在并发场景会不会出问题
 ```
 
 **期望**：和场景 1 类似，但中文 findings 更带"挑战式"语气（质疑设计假设、推测失败模式、ship/no-ship 判断），不是常规审查口吻。
@@ -211,7 +236,7 @@ pgrep -fc app-server-broker
 **指令**：
 
 ```text
-/codex:review --wait 仅关注 SQL 注入和 XSS
+/codex:review 仅关注 SQL 注入和 XSS
 ```
 
 **期望**：成功执行，Codex 的输出在 findings 里会更聚焦你指定的关注点。

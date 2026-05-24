@@ -11,70 +11,68 @@ function read(relativePath) {
   return fs.readFileSync(path.join(PLUGIN_ROOT, relativePath), "utf8");
 }
 
-test("review command uses AskUserQuestion and background Bash while staying review-only", () => {
+test("review command estimates diff size and only asks the user when large", () => {
   const source = read("commands/review.md");
-  assert.match(source, /AskUserQuestion/);
-  assert.match(source, /PushNotification/);
-  assert.match(source, /\bBash\(/);
-  assert.match(source, /Do not fix issues/i);
-  assert.match(source, /review-only/i);
-  assert.match(source, /return Codex's output verbatim to the user/i);
-  assert.match(source, /```bash/);
-  assert.match(source, /```typescript/);
-  assert.match(source, /review "\$ARGUMENTS"/);
-  assert.match(source, /\[--scope auto\|working-tree\|branch\] \[focus \.\.\.\]/);
-  assert.match(source, /run_in_background:\s*true/);
-  assert.match(source, /command:\s*`node "\$\{CLAUDE_PLUGIN_ROOT\}\/scripts\/codex-companion\.mjs" review "\$ARGUMENTS"`/);
-  assert.match(source, /description:\s*"Codex review"/);
-  assert.match(source, /Do not poll the output/i);
-  assert.match(source, /Return the command stdout verbatim, exactly as-is/i);
-  assert.match(source, /git status --short --untracked-files=all/);
+  // allowed-tools：只开 Bash(node) + 单条 estimate 用的 git shortstat + Ask + Push
+  assert.match(source, /allowed-tools:\s*Bash\(node:\*\),\s*Bash\(git diff --shortstat:\*\),\s*Bash\(git status --short:\*\),\s*AskUserQuestion,\s*PushNotification/);
+  // 决策三步流强约束
+  assert.match(source, /# Decision flow \(execute in order, each step is mandatory\)/);
+  assert.match(source, /Step 1 — Fast path on explicit flag/);
+  assert.match(source, /Step 2 — Estimate diff size \(ONE Bash call only\)/);
+  assert.match(source, /Step 3 — Branch on size/);
+  // 估算策略
   assert.match(source, /git diff --shortstat/);
-  assert.match(source, /Treat untracked files or directories as reviewable work/i);
-  assert.match(source, /Recommend waiting only when the review is clearly tiny, roughly 1-2 files total/i);
-  assert.match(source, /In every other case, including unclear size, recommend background/i);
-  assert.match(source, /The companion script parses `--wait` and `--background`/i);
-  assert.match(source, /When in doubt, run the review/i);
-  assert.match(source, /\(Recommended\)/);
-  // streaming + Chinese output + completion notification additions
+  assert.match(source, /Do not run multiple git commands here/);
+  // 小直跑 / 大才问
+  assert.match(source, /files ≤ 30 AND total ≤ 3000/);
+  assert.match(source, /files > 30 OR total > 3000/);
+  // 问的时候推荐 background
+  assert.match(source, /Run in background \(Recommended\)/);
+  assert.match(source, /Run in foreground/);
+  // AskUserQuestion 后强制 Bash
+  assert.match(source, /the very next action on this turn is the corresponding `Bash` call below/);
+  assert.match(source, /Do not summarize, do not announce, do not run any other tool, do not stop/);
+  // 前后台流程
+  assert.match(source, /```bash/);
+  assert.match(source, /node "\$\{CLAUDE_PLUGIN_ROOT\}\/scripts\/codex-companion\.mjs" review "\$ARGUMENTS"/);
+  assert.match(source, /run_in_background:\s*true/);
+  assert.match(source, /description:\s*"Codex review"/);
+  // 流式 + 中文 + 通知
   assert.match(source, /streams `\[codex\] \.\.\.` progress events/i);
-  assert.match(source, /Simplified Chinese/);
+  assert.match(source, /Chinese verdict|Simplified Chinese/);
+  assert.match(source, /verbatim/i);
   assert.match(source, /PushNotification\(\{/);
+  // review-only
+  assert.match(source, /review-only/i);
+  assert.match(source, /Do not fix any issues/i);
 });
 
-test("adversarial review command uses AskUserQuestion and background Bash while staying review-only", () => {
+test("adversarial review command estimates diff size and only asks the user when large", () => {
   const source = read("commands/adversarial-review.md");
-  assert.match(source, /AskUserQuestion/);
-  assert.match(source, /PushNotification/);
-  assert.match(source, /\bBash\(/);
-  assert.match(source, /Do not fix issues/i);
-  assert.match(source, /review-only/i);
-  assert.match(source, /return Codex's output verbatim to the user/i);
-  assert.match(source, /```bash/);
-  assert.match(source, /```typescript/);
-  assert.match(source, /adversarial-review "\$ARGUMENTS"/);
-  assert.match(source, /\[--scope auto\|working-tree\|branch\] \[focus \.\.\.\]/);
-  assert.match(source, /run_in_background:\s*true/);
-  assert.match(source, /command:\s*`node "\$\{CLAUDE_PLUGIN_ROOT\}\/scripts\/codex-companion\.mjs" adversarial-review "\$ARGUMENTS"`/);
-  assert.match(source, /description:\s*"Codex adversarial review"/);
-  assert.match(source, /Do not poll the output/i);
-  assert.match(source, /Return the command stdout verbatim, exactly as-is/i);
-  assert.match(source, /git status --short --untracked-files=all/);
+  assert.match(source, /allowed-tools:\s*Bash\(node:\*\),\s*Bash\(git diff --shortstat:\*\),\s*Bash\(git status --short:\*\),\s*AskUserQuestion,\s*PushNotification/);
+  assert.match(source, /# Decision flow \(execute in order, each step is mandatory\)/);
+  assert.match(source, /Step 1 — Fast path on explicit flag/);
+  assert.match(source, /Step 2 — Estimate diff size \(ONE Bash call only\)/);
+  assert.match(source, /Step 3 — Branch on size/);
   assert.match(source, /git diff --shortstat/);
-  assert.match(source, /Treat untracked files or directories as reviewable work/i);
-  assert.match(source, /Recommend waiting only when the scoped review is clearly tiny, roughly 1-2 files total/i);
-  assert.match(source, /In every other case, including unclear size, recommend background/i);
-  assert.match(source, /The companion script parses `--wait` and `--background`/i);
-  assert.match(source, /When in doubt, run the review/i);
-  assert.match(source, /\(Recommended\)/);
-  assert.match(source, /uses the same review target selection as `\/codex:review`/i);
-  assert.match(source, /supports working-tree review, branch review, and `--base <ref>`/i);
-  assert.match(source, /does not support `--scope staged` or `--scope unstaged`/i);
-  assert.match(source, /can still take extra focus text after the flags/i);
-  // streaming + Chinese output + completion notification additions
+  assert.match(source, /Do not run multiple git commands here/);
+  assert.match(source, /files ≤ 30 AND total ≤ 3000/);
+  assert.match(source, /files > 30 OR total > 3000/);
+  assert.match(source, /Run in background \(Recommended\)/);
+  assert.match(source, /Run in foreground/);
+  assert.match(source, /the very next action on this turn is the corresponding `Bash` call below/);
+  assert.match(source, /Do not summarize, do not announce, do not run any other tool, do not stop/);
+  assert.match(source, /```bash/);
+  assert.match(source, /node "\$\{CLAUDE_PLUGIN_ROOT\}\/scripts\/codex-companion\.mjs" adversarial-review "\$ARGUMENTS"/);
+  assert.match(source, /run_in_background:\s*true/);
+  assert.match(source, /description:\s*"Codex adversarial review"/);
   assert.match(source, /streams `\[codex\] \.\.\.` progress events/i);
-  assert.match(source, /Simplified Chinese/);
+  assert.match(source, /Chinese verdict|Simplified Chinese/);
+  assert.match(source, /verbatim/i);
   assert.match(source, /PushNotification\(\{/);
+  assert.match(source, /review-only/i);
+  assert.match(source, /Do not fix any issues/i);
+  assert.match(source, /adversarial framing/i);
 });
 
 test("continue is not exposed as a user-facing command", () => {
