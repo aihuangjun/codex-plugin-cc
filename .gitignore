@@ -148,3 +148,11 @@ vite.config.ts.timestamp-*
 
 output/
 plugins/codex/.generated/
+
+# IDE / editor caches
+.idea/
+.vscode/
+*.swp
+*.swo
+.DS_Store
+Thumbs.db

@@ -1,305 +1,159 @@
-# Codex plugin for Claude Code
+# codex-plugin-cc-opt
 
-Use Codex from inside Claude Code for code reviews or to delegate tasks to Codex.
+> **Fork of [`openai/codex-plugin-cc`](https://github.com/openai/codex-plugin-cc)** maintained by [`aihuangjun`](https://github.com/aihuangjun).
+> Marketplace name: `openai-codex-opt` — installable alongside the official version and the `dragon-cc-codex` fork.
 
-This plugin is for Claude Code users who want an easy way to start using Codex from the workflow
-they already have.
+[![CI](https://github.com/aihuangjun/codex-plugin-cc/actions/workflows/pull-request-ci.yml/badge.svg)](https://github.com/aihuangjun/codex-plugin-cc/actions/workflows/pull-request-ci.yml)
 
-<video src="./docs/plugin-demo.webm" controls muted playsinline autoplay></video>
+Use Codex from inside Claude Code for code review or to delegate tasks — with **real-time progress streaming**, **structured Chinese verdicts**, **completion notifications**, and **targeted diff review**.
 
-## What You Get
+---
 
-- `/codex:review` for a normal read-only Codex review
-- `/codex:adversarial-review` for a steerable challenge review
-- `/codex:rescue`, `/codex:status`, `/codex:result`, and `/codex:cancel` to delegate work and manage background jobs
+## TL;DR (quick install)
 
-## Requirements
-
-- **ChatGPT subscription (incl. Free) or OpenAI API key.**
-  - Usage will contribute to your Codex usage limits. [Learn more](https://developers.openai.com/codex/pricing).
-- **Node.js 18.18 or later**
-
-## Install
-
-Add the marketplace in Claude Code:
-
-```bash
-/plugin marketplace add openai/codex-plugin-cc
-```
-
-Install the plugin:
-
-```bash
-/plugin install codex@openai-codex
-```
-
-Reload plugins:
-
-```bash
+```text
+/plugin marketplace add aihuangjun/codex-plugin-cc
+/plugin install codex@openai-codex-opt
 /reload-plugins
-```
-
-Then run:
-
-```bash
 /codex:setup
 ```
 
-`/codex:setup` will tell you whether Codex is ready. If Codex is missing and npm is available, it can offer to install Codex for you.
-
-If you prefer to install Codex yourself, use:
-
-```bash
-npm install -g @openai/codex
-```
-
-If Codex is installed but not logged in yet, run:
-
-```bash
-!codex login
-```
-
-After install, you should see:
-
-- the slash commands listed below
-- the `codex:codex-rescue` subagent in `/agents`
-
-One simple first run is:
-
-```bash
-/codex:review --background
-/codex:status
-/codex:result
-```
-
-## Usage
-
-### `/codex:review`
-
-Runs a normal Codex review on your current work. It gives you the same quality of code review as running `/review` inside Codex directly.
-
-> [!NOTE]
-> Code review especially for multi-file changes might take a while. It's generally recommended to run it in the background.
-
-Use it when you want:
-
-- a review of your current uncommitted changes
-- a review of your branch compared to a base branch like `main`
-
-Use `--base <ref>` for branch review. It also supports `--wait` and `--background`. It is not steerable and does not take custom focus text. Use [`/codex:adversarial-review`](#codexadversarial-review) when you want to challenge a specific decision or risk area.
-
-Examples:
-
-```bash
-/codex:review
-/codex:review --base main
-/codex:review --background
-```
-
-This command is read-only and will not perform any changes. When run in the background you can use [`/codex:status`](#codexstatus) to check on the progress and [`/codex:cancel`](#codexcancel) to cancel the ongoing task.
-
-### `/codex:adversarial-review`
-
-Runs a **steerable** review that questions the chosen implementation and design.
-
-It can be used to pressure-test assumptions, tradeoffs, failure modes, and whether a different approach would have been safer or simpler.
-
-It uses the same review target selection as `/codex:review`, including `--base <ref>` for branch review.
-It also supports `--wait` and `--background`. Unlike `/codex:review`, it can take extra focus text after the flags.
-
-Use it when you want:
-
-- a review before shipping that challenges the direction, not just the code details
-- review focused on design choices, tradeoffs, hidden assumptions, and alternative approaches
-- pressure-testing around specific risk areas like auth, data loss, rollback, race conditions, or reliability
-
-Examples:
-
-```bash
-/codex:adversarial-review
-/codex:adversarial-review --base main challenge whether this was the right caching and retry design
-/codex:adversarial-review --background look for race conditions and question the chosen approach
-```
-
-This command is read-only. It does not fix code.
-
-### `/codex:rescue`
-
-Hands a task to Codex through the `codex:codex-rescue` subagent.
-
-Use it when you want Codex to:
-
-- investigate a bug
-- try a fix
-- continue a previous Codex task
-- take a faster or cheaper pass with a smaller model
-
-> [!NOTE]
-> Depending on the task and the model you choose these tasks might take a long time and it's generally recommended to force the task to be in the background or move the agent to the background.
-
-It supports `--background`, `--wait`, `--resume`, and `--fresh`. If you omit `--resume` and `--fresh`, the plugin can offer to continue the latest rescue thread for this repo.
-
-Examples:
-
-```bash
-/codex:rescue investigate why the tests started failing
-/codex:rescue fix the failing test with the smallest safe patch
-/codex:rescue --resume apply the top fix from the last run
-/codex:rescue --model gpt-5.4-mini --effort medium investigate the flaky integration test
-/codex:rescue --model spark fix the issue quickly
-/codex:rescue --background investigate the regression
-```
-
-You can also just ask for a task to be delegated to Codex:
+Then in any git repository with changes:
 
 ```text
-Ask Codex to redesign the database connection to be more resilient.
+/codex:review                                  # full working-tree review (small diffs auto-run; large diffs ask first)
+/codex:diff --file src/auth.js                 # review just one file
+/codex:adversarial-review focus on race conditions
+/codex:rescue --background fix the failing integration test
+/codex:history                                 # past review verdicts for this repo
 ```
 
-**Notes:**
+Detailed install, verification scenarios, and troubleshooting: [`docs/CHANGES_AND_USAGE.md`](docs/CHANGES_AND_USAGE.md).
+Full release history: [`CHANGELOG.md`](CHANGELOG.md).
 
-- if you do not pass `--model` or `--effort`, Codex chooses its own defaults.
-- if you say `spark`, the plugin maps that to `gpt-5.3-codex-spark`
-- follow-up rescue requests can continue the latest Codex task in the repo
+---
 
-### `/codex:status`
+## What this fork changes vs upstream
 
-Shows running and recent Codex jobs for the current repository.
+| Capability | `openai/codex-plugin-cc` (1.0.4) | `dragon84867/codex-plugin-cc` (1.2.6) | **`openai-codex-opt` (this fork, 2.0.2)** |
+|---|---|---|---|
+| Live `[codex] …` progress stream during review | ❌ | ❌ | ✅ |
+| Chinese verdict / findings / recommendations | ❌ | ❌ | ✅ |
+| Completion `PushNotification` (fg & bg) | ❌ | bg only | ✅ both |
+| Background launch payload (jobId + 4 control commands) | ❌ | partial | ✅ uniform across review / adversarial / diff / rescue |
+| Auto rescue suggestion on `needs-attention` verdicts | ❌ | ❌ | ✅ |
+| `/codex:diff` (single file / commit / range) | ❌ | ❌ | ✅ |
+| `/codex:history` (past verdicts) | ❌ | ❌ | ✅ |
+| `/codex:observe` live event viewer | ❌ | ✅ | ✅ |
+| `/codex:rescue --worktree` isolated branch | ❌ | ✅ | ✅ |
+| Cross-workspace job lookup | ❌ | ✅ | ✅ |
+| `sandbox_mode` from `~/.codex/config.toml` | ❌ hard-coded | ✅ | ✅ |
+| Broker process leak fixed | ❌ | ✅ | ✅ |
+| Coexists with upstream install | — | ✅ | ✅ |
 
-Examples:
+---
+
+## Command reference
+
+| Command | Purpose |
+|---|---|
+| `/codex:setup` | Verify Codex CLI, Node, auth status. Toggle stop-time review gate. |
+| `/codex:review [focus]` | Structured Chinese review of working-tree (or `--base <ref>` for a branch diff). Small diffs auto-run; large diffs ask first. Append `--background` to detach. |
+| `/codex:adversarial-review [focus]` | Same target selection as `/codex:review` but framed as a challenge review (questions the design, looks for failure modes). |
+| `/codex:diff --file <path> \| --commit <sha> \| --range <a>..<b>` | Targeted diff review — single file, single commit, or arbitrary range. |
+| `/codex:rescue [task]` | Delegate code change / debugging work to Codex. Supports `--background`, `--worktree`, `--resume`, `--fresh`, `--model`, `--effort`. |
+| `/codex:status [jobId] [--all]` | Show queued / running jobs (and recent finished). `--all` includes other workspaces. |
+| `/codex:observe [jobId]` | Live, color-coded event stream for any running / finished job. Read-only — doesn't lock the Codex thread. |
+| `/codex:result [jobId]` | Print the stored final output for a finished job. |
+| `/codex:cancel [jobId]` | Abort a queued / running job (sends a turn-interrupt to Codex). |
+| `/codex:history [--all] [--limit N]` | Past review / adversarial-review jobs for this workspace, with verdict + findings count. |
+
+`--background` works on `/codex:review`, `/codex:adversarial-review`, `/codex:diff`, and `/codex:rescue`. Every background launch now prints a uniform block:
+
+```
+Codex Review started in the background.
+  Job id: review-abc1234
+
+Async control:
+  /codex:status review-abc1234     — current state, phase, recent progress
+  /codex:observe review-abc1234    — live event stream (read-only, Ctrl+C exits observer only)
+  /codex:result review-abc1234     — full final output (once status is completed/failed)
+  /codex:cancel review-abc1234     — abort the run
+
+A PushNotification will fire automatically when the job finishes.
+```
+
+---
+
+## Requirements
+
+- Node.js ≥ 18.18 (CI tests on Node 22).
+- Codex CLI (`npm install -g @openai/codex`) — version 0.130+ recommended for stable Chinese-output behavior.
+- ChatGPT subscription (incl. Free) or OpenAI API key. Usage counts against your Codex quota. [Pricing](https://developers.openai.com/codex/pricing).
+
+---
+
+## Install (full instructions)
+
+If you already have the official `openai-codex` or dragon's `dragon-cc-codex` installed and want to switch:
+
+```text
+/plugin uninstall codex@openai-codex
+/plugin marketplace remove openai-codex
+```
+
+Then:
+
+```text
+/plugin marketplace add aihuangjun/codex-plugin-cc
+/plugin install codex@openai-codex-opt
+/reload-plugins
+/codex:setup
+```
+
+Upgrade later with:
+
+```text
+/plugin update codex@openai-codex-opt
+/reload-plugins
+```
+
+Uninstall:
+
+```text
+/plugin uninstall codex@openai-codex-opt
+/plugin marketplace remove openai-codex-opt
+```
+
+---
+
+## Development
 
 ```bash
-/codex:status
-/codex:status task-abc123
+git clone https://github.com/aihuangjun/codex-plugin-cc.git
+cd codex-plugin-cc
+npm install
+npm test
 ```
 
-Use it to:
-
-- check progress on background work
-- see the latest completed job
-- confirm whether a task is still running
-
-### `/codex:result`
-
-Shows the final stored Codex output for a finished job.
-When available, it also includes the Codex session ID so you can reopen that run directly in Codex with `codex resume <session-id>`.
-
-Examples:
+Bump version (syncs `package.json`, `package-lock.json`, `plugin.json`, `marketplace.json` in one shot):
 
 ```bash
-/codex:result
-/codex:result task-abc123
+npm run bump:patch    # 2.0.2 → 2.0.3
+npm run bump:minor    # 2.0.2 → 2.1.0
+npm run bump:major    # 2.0.2 → 3.0.0
+npm run bump-version 2.5.0    # explicit version
+
+npm run check-version  # CI runs this; fails the build on drift
 ```
 
-### `/codex:cancel`
+---
 
-Cancels an active background Codex job.
+## Acknowledgements
 
-Examples:
+- Upstream: [`openai/codex-plugin-cc`](https://github.com/openai/codex-plugin-cc)
+- Many底层 bug 修复 / `/codex:observe` / `--worktree` / signal-file PushNotification cherry-picked from [`dragon84867/codex-plugin-cc`](https://github.com/dragon84867/codex-plugin-cc) 1.0.4 → 1.2.6.
 
-```bash
-/codex:cancel
-/codex:cancel task-abc123
-```
+## License
 
-### `/codex:setup`
-
-Checks whether Codex is installed and authenticated.
-If Codex is missing and npm is available, it can offer to install Codex for you.
-
-You can also use `/codex:setup` to manage the optional review gate.
-
-#### Enabling review gate
-
-```bash
-/codex:setup --enable-review-gate
-/codex:setup --disable-review-gate
-```
-
-When the review gate is enabled, the plugin uses a `Stop` hook to run a targeted Codex review based on Claude's response. If that review finds issues, the stop is blocked so Claude can address them first.
-
-> [!WARNING]
-> The review gate can create a long-running Claude/Codex loop and may drain usage limits quickly. Only enable it when you plan to actively monitor the session.
-
-## Typical Flows
-
-### Review Before Shipping
-
-```bash
-/codex:review
-```
-
-### Hand A Problem To Codex
-
-```bash
-/codex:rescue investigate why the build is failing in CI
-```
-
-### Start Something Long-Running
-
-```bash
-/codex:adversarial-review --background
-/codex:rescue --background investigate the flaky test
-```
-
-Then check in with:
-
-```bash
-/codex:status
-/codex:result
-```
-
-## Codex Integration
-
-The Codex plugin wraps the [Codex app server](https://developers.openai.com/codex/app-server). It uses the global `codex` binary installed in your environment and [applies the same configuration](https://developers.openai.com/codex/config-basic).
-
-### Common Configurations
-
-If you want to change the default reasoning effort or the default model that gets used by the plugin, you can define that inside your user-level or project-level `config.toml`. For example to always use `gpt-5.4-mini` on `high` for a specific project you can add the following to a `.codex/config.toml` file at the root of the directory you started Claude in:
-
-```toml
-model = "gpt-5.4-mini"
-model_reasoning_effort = "high"
-```
-
-Your configuration will be picked up based on:
-
-- user-level config in `~/.codex/config.toml`
-- project-level overrides in `.codex/config.toml`
-- project-level overrides only load when the [project is trusted](https://developers.openai.com/codex/config-advanced#project-config-files-codexconfigtoml)
-
-Check out the Codex docs for more [configuration options](https://developers.openai.com/codex/config-reference).
-
-### Moving The Work Over To Codex
-
-Delegated tasks and any [stop gate](#what-does-the-review-gate-do) run can also be directly resumed inside Codex by running `codex resume` either with the specific session ID you received from running `/codex:result` or `/codex:status` or by selecting it from the list.
-
-This way you can review the Codex work or continue the work there.
-
-## FAQ
-
-### Do I need a separate Codex account for this plugin?
-
-If you are already signed into Codex on this machine, that account should work immediately here too. This plugin uses your local Codex CLI authentication.
-
-If you only use Claude Code today and have not used Codex yet, you will also need to sign in to Codex with either a ChatGPT account or an API key. [Codex is available with your ChatGPT subscription](https://developers.openai.com/codex/pricing/), and [`codex login`](https://developers.openai.com/codex/cli/reference/#codex-login) supports both ChatGPT and API key sign-in. Run `/codex:setup` to check whether Codex is ready, and use `!codex login` if it is not.
-
-### Does the plugin use a separate Codex runtime?
-
-No. This plugin delegates through your local [Codex CLI](https://developers.openai.com/codex/cli/) and [Codex app server](https://developers.openai.com/codex/app-server/) on the same machine.
-
-That means:
-
-- it uses the same Codex install you would use directly
-- it uses the same local authentication state
-- it uses the same repository checkout and machine-local environment
-
-### Will it use the same Codex config I already have?
-
-Yes. If you already use Codex, the plugin picks up the same [configuration](#common-configurations).
-
-### Can I keep using my current API key or base URL setup?
-
-Yes. Because the plugin uses your local Codex CLI, your existing sign-in method and config still apply.
-
-If you need to point the built-in OpenAI provider at a different endpoint, set `openai_base_url` in your [Codex config](https://developers.openai.com/codex/config-advanced/#config-and-state-locations).
+Apache-2.0 (inherited from upstream).

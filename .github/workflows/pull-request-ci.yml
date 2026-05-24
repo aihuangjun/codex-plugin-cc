@@ -1,7 +1,10 @@
-name: Pull Request CI
+name: CI
 
 on:
   pull_request:
+  push:
+    branches:
+      - main
 
 permissions:
   contents: read
@@ -10,7 +13,7 @@ jobs:
   ci:
     name: CI
     runs-on: ubuntu-latest
-    timeout-minutes: 10
+    timeout-minutes: 15
 
     steps:
       - name: Check out repository
@@ -27,6 +30,9 @@ jobs:
 
       - name: Install Codex CLI
         run: npm install -g @openai/codex
+
+      - name: Check version is in sync across package.json / plugin.json / marketplace.json
+        run: npm run check-version
 
       - name: Run test suite
         run: npm test
