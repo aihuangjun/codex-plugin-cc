@@ -1,7 +1,9 @@
 import fs from "node:fs";
+import path from "node:path";
 import process from "node:process";
 
-import { readJobFile, resolveJobFile, resolveJobLogFile, upsertJob, writeJobFile } from "./state.mjs";
+import { emitEvent, EVENT_TYPES } from "./event-stream.mjs";
+import { readJobFile, resolveJobFile, resolveJobLogFile, resolveJobsDir, upsertJob, writeJobFile } from "./state.mjs";
 
 export const SESSION_ID_ENV = "CODEX_COMPANION_SESSION_ID";
 
@@ -46,6 +48,22 @@ export function appendLogBlock(logFile, title, body) {
     return;
   }
   fs.appendFileSync(logFile, `\n[${nowIso()}] ${title}\n${String(body).trimEnd()}\n`, "utf8");
+}
+
+export function resolveSignalFile(jobsDir, jobId) {
+  return path.join(jobsDir, `${jobId}.done`);
+}
+
+export function writeCompletionSignalFile(jobsDir, jobId, status, summary) {
+  const signalFile = resolveSignalFile(jobsDir, jobId);
+  const safeStatus = status === "completed" ? "completed" : "failed";
+  const line = `[${nowIso()}] ${safeStatus} ${jobId}${summary ? ` ${summary}` : ""}`;
+  try {
+    fs.writeFileSync(signalFile, `${line}\n`, "utf8");
+  } catch {
+    // Signal file is best-effort; do not fail the job if it cannot be written.
+  }
+  return signalFile;
 }
 
 export function createJobLogFile(workspaceRoot, jobId, title) {
@@ -114,8 +132,19 @@ export function createJobProgressUpdater(workspaceRoot, jobId) {
   };
 }
 
-export function createProgressReporter({ stderr = false, logFile = null, onEvent = null } = {}) {
-  if (!stderr && !logFile && !onEvent) {
+function inferEventStreamType(event) {
+  const title = event.logTitle ?? "";
+  if (/reasoning summary/i.test(title)) {
+    return EVENT_TYPES.REASONING;
+  }
+  if (/message$/i.test(title) || /review output/i.test(title)) {
+    return EVENT_TYPES.MESSAGE;
+  }
+  return EVENT_TYPES.PHASE;
+}
+
+export function createProgressReporter({ stderr = false, logFile = null, onEvent = null, eventStream = null } = {}) {
+  if (!stderr && !logFile && !onEvent && !eventStream) {
     return null;
   }
 
@@ -127,6 +156,26 @@ export function createProgressReporter({ stderr = false, logFile = null, onEvent
     }
     appendLogLine(logFile, event.message);
     appendLogBlock(logFile, event.logTitle, event.logBody);
+    if (eventStream) {
+      const type = inferEventStreamType(event);
+      const data = { phase: event.phase };
+      if (event.message) {
+        data.message = event.message;
+      }
+      if (event.threadId) {
+        data.threadId = event.threadId;
+      }
+      if (event.turnId) {
+        data.turnId = event.turnId;
+      }
+      if (event.logTitle) {
+        data.logTitle = event.logTitle;
+      }
+      if (event.logBody) {
+        data.logBody = event.logBody;
+      }
+      emitEvent(eventStream, type, data);
+    }
     onEvent?.(event);
   };
 }
@@ -146,10 +195,13 @@ export async function runTrackedJob(job, runner, options = {}) {
     startedAt: nowIso(),
     phase: "starting",
     pid: process.pid,
-    logFile: options.logFile ?? job.logFile ?? null
+    logFile: options.logFile ?? job.logFile ?? null,
+    eventFile: options.eventFile ?? job.eventFile ?? null
   };
   writeJobFile(job.workspaceRoot, job.id, runningRecord);
   upsertJob(job.workspaceRoot, runningRecord);
+
+  const jobsDir = resolveJobsDir(job.workspaceRoot);
 
   try {
     const execution = await runner();
@@ -177,6 +229,7 @@ export async function runTrackedJob(job, runner, options = {}) {
       completedAt
     });
     appendLogBlock(options.logFile ?? job.logFile ?? null, "Final output", execution.rendered);
+    writeCompletionSignalFile(jobsDir, job.id, completionStatus, execution.summary);
     return execution;
   } catch (error) {
     const errorMessage = error instanceof Error ? error.message : String(error);
@@ -199,6 +252,7 @@ export async function runTrackedJob(job, runner, options = {}) {
       errorMessage,
       completedAt
     });
+    writeCompletionSignalFile(jobsDir, job.id, "failed", errorMessage);
     throw error;
   }
 }

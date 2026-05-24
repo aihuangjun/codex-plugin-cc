@@ -37,6 +37,7 @@ Forwarding rules:
 - `--fresh` means do not add `--resume-last`.
 - If the user is clearly asking to continue prior Codex work in this repository, such as "continue", "keep going", "resume", "apply the top fix", or "dig deeper", add `--resume-last` unless `--fresh` is present.
 - Otherwise forward the task as a fresh `task` run.
+- `--worktree` runs the task in an isolated git worktree. Preserve it for the forwarded `task` call. `--worktree` and `--resume-last` are mutually exclusive — if both are present, report the conflict and do not forward.
 - Preserve the user's task text as-is apart from stripping routing flags.
 - Return the stdout of the `codex-companion` command exactly as-is.
 - If the Bash call fails or Codex cannot be invoked, return nothing.

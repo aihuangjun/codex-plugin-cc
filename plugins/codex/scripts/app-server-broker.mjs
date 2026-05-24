@@ -9,6 +9,7 @@ import { parseArgs } from "./lib/args.mjs";
 import { BROKER_BUSY_RPC_CODE, CodexAppServerClient } from "./lib/app-server.mjs";
 import { parseBrokerEndpoint } from "./lib/broker-endpoint.mjs";
 
+const IDLE_TIMEOUT_MS = 5000;
 const STREAMING_METHODS = new Set(["turn/start", "review/start", "thread/compact/start"]);
 
 function buildStreamThreadIds(method, params, result) {
@@ -70,6 +71,28 @@ async function main() {
   let activeStreamSocket = null;
   let activeStreamThreadIds = null;
   const sockets = new Set();
+  let idleTimer = null;
+  let serverRef = null;
+
+  function startIdleTimer() {
+    cancelIdleTimer();
+    idleTimer = setTimeout(async () => {
+      if (serverRef) {
+        await shutdown(serverRef);
+        process.exit(0);
+      }
+    }, IDLE_TIMEOUT_MS);
+    if (idleTimer.unref) {
+      idleTimer.unref();
+    }
+  }
+
+  function cancelIdleTimer() {
+    if (idleTimer) {
+      clearTimeout(idleTimer);
+      idleTimer = null;
+    }
+  }
 
   function clearSocketOwnership(socket) {
     if (activeRequestSocket === socket) {
@@ -100,6 +123,7 @@ async function main() {
   }
 
   async function shutdown(server) {
+    cancelIdleTimer();
     for (const socket of sockets) {
       socket.end();
     }
@@ -117,6 +141,7 @@ async function main() {
 
   const server = net.createServer((socket) => {
     sockets.add(socket);
+    cancelIdleTimer();
     socket.setEncoding("utf8");
     let buffer = "";
 
@@ -225,11 +250,17 @@ async function main() {
     socket.on("close", () => {
       sockets.delete(socket);
       clearSocketOwnership(socket);
+      if (sockets.size === 0) {
+        startIdleTimer();
+      }
     });
 
     socket.on("error", () => {
       sockets.delete(socket);
       clearSocketOwnership(socket);
+      if (sockets.size === 0) {
+        startIdleTimer();
+      }
     });
   });
 
@@ -243,7 +274,9 @@ async function main() {
     process.exit(0);
   });
 
+  serverRef = server;
   server.listen(listenTarget.path);
+  startIdleTimer();
 }
 
 main().catch((error) => {

@@ -7,7 +7,9 @@ import { resolveWorkspaceRoot } from "./workspace.mjs";
 
 const STATE_VERSION = 1;
 const PLUGIN_DATA_ENV = "CLAUDE_PLUGIN_DATA";
-const FALLBACK_STATE_ROOT_DIR = path.join(os.tmpdir(), "codex-companion");
+const DEFAULT_STATE_ROOT_DIR = path.join(os.homedir(), ".codex-companion", "state");
+const LEGACY_TMPDIR_ROOT = path.join(os.tmpdir(), "codex-companion");
+const CLAUDE_PLUGINS_DATA_DIR = path.join(os.homedir(), ".claude", "plugins", "data");
 const STATE_FILE_NAME = "state.json";
 const JOBS_DIR_NAME = "jobs";
 const MAX_JOBS = 50;
@@ -26,8 +28,61 @@ function defaultState() {
   };
 }
 
-export function resolveStateDir(cwd) {
-  const workspaceRoot = resolveWorkspaceRoot(cwd);
+const LEGACY_ROOTS_ENV = "CODEX_COMPANION_LEGACY_ROOTS";
+
+function resolveStateRoot() {
+  const pluginDataDir = process.env[PLUGIN_DATA_ENV];
+  return pluginDataDir ? path.join(pluginDataDir, "state") : DEFAULT_STATE_ROOT_DIR;
+}
+
+function discoverPluginDataCodexRoots() {
+  const out = [];
+  try {
+    if (!fs.existsSync(CLAUDE_PLUGINS_DATA_DIR)) {
+      return out;
+    }
+    for (const entry of fs.readdirSync(CLAUDE_PLUGINS_DATA_DIR, { withFileTypes: true })) {
+      if (entry.isDirectory() && /codex/i.test(entry.name)) {
+        out.push(path.join(CLAUDE_PLUGINS_DATA_DIR, entry.name, "state"));
+      }
+    }
+  } catch {
+    // Best-effort; ignore unreadable plugin data dir.
+  }
+  return out;
+}
+
+function resolveLegacyRoots() {
+  const override = process.env[LEGACY_ROOTS_ENV];
+  if (override === "") {
+    return [];
+  }
+  if (override) {
+    return override.split(path.delimiter).filter(Boolean);
+  }
+  return [DEFAULT_STATE_ROOT_DIR, LEGACY_TMPDIR_ROOT, ...discoverPluginDataCodexRoots()];
+}
+
+function collectCandidateStateRoots() {
+  const seen = new Set();
+  const roots = [];
+
+  const push = (root) => {
+    if (root && !seen.has(root)) {
+      seen.add(root);
+      roots.push(root);
+    }
+  };
+
+  push(resolveStateRoot());
+  for (const root of resolveLegacyRoots()) {
+    push(root);
+  }
+
+  return roots;
+}
+
+function computeStateSlugHash(workspaceRoot) {
   let canonicalWorkspaceRoot = workspaceRoot;
   try {
     canonicalWorkspaceRoot = fs.realpathSync.native(workspaceRoot);
@@ -38,9 +93,90 @@ export function resolveStateDir(cwd) {
   const slugSource = path.basename(workspaceRoot) || "workspace";
   const slug = slugSource.replace(/[^a-zA-Z0-9._-]+/g, "-").replace(/^-+|-+$/g, "") || "workspace";
   const hash = createHash("sha256").update(canonicalWorkspaceRoot).digest("hex").slice(0, 16);
-  const pluginDataDir = process.env[PLUGIN_DATA_ENV];
-  const stateRoot = pluginDataDir ? path.join(pluginDataDir, "state") : FALLBACK_STATE_ROOT_DIR;
-  return path.join(stateRoot, `${slug}-${hash}`);
+  return `${slug}-${hash}`;
+}
+
+export function resolveStateDir(cwd) {
+  const workspaceRoot = resolveWorkspaceRoot(cwd);
+  return path.join(resolveStateRoot(), computeStateSlugHash(workspaceRoot));
+}
+
+export function collectWorkspaceJobsAcrossRoots(cwd) {
+  const workspaceRoot = resolveWorkspaceRoot(cwd);
+  const slugHash = computeStateSlugHash(workspaceRoot);
+  const merged = new Map();
+
+  for (const stateRoot of collectCandidateStateRoots()) {
+    const stateFile = path.join(stateRoot, slugHash, STATE_FILE_NAME);
+    if (!fs.existsSync(stateFile)) {
+      continue;
+    }
+    try {
+      const parsed = JSON.parse(fs.readFileSync(stateFile, "utf8"));
+      const jobs = Array.isArray(parsed.jobs) ? parsed.jobs : [];
+      for (const job of jobs) {
+        if (!job?.id) {
+          continue;
+        }
+        const existing = merged.get(job.id);
+        if (!existing) {
+          merged.set(job.id, job);
+          continue;
+        }
+        const existingUpdated = String(existing.updatedAt ?? "");
+        const candidateUpdated = String(job.updatedAt ?? "");
+        if (candidateUpdated.localeCompare(existingUpdated) > 0) {
+          merged.set(job.id, job);
+        }
+      }
+    } catch {
+      // Skip corrupted state files.
+    }
+  }
+
+  return [...merged.values()];
+}
+
+export function findJobByIdAcrossWorkspaces(jobId) {
+  if (!jobId) {
+    return null;
+  }
+
+  for (const stateRoot of collectCandidateStateRoots()) {
+    if (!fs.existsSync(stateRoot)) {
+      continue;
+    }
+
+    let entries;
+    try {
+      entries = fs.readdirSync(stateRoot, { withFileTypes: true });
+    } catch {
+      continue;
+    }
+
+    for (const entry of entries) {
+      if (!entry.isDirectory()) {
+        continue;
+      }
+      const stateDir = path.join(stateRoot, entry.name);
+      const stateFile = path.join(stateDir, STATE_FILE_NAME);
+      if (!fs.existsSync(stateFile)) {
+        continue;
+      }
+      try {
+        const parsed = JSON.parse(fs.readFileSync(stateFile, "utf8"));
+        const jobs = Array.isArray(parsed.jobs) ? parsed.jobs : [];
+        const job = jobs.find((entry) => entry.id === jobId);
+        if (job) {
+          return { stateDir, job };
+        }
+      } catch {
+        // Skip corrupted state files
+      }
+    }
+  }
+
+  return null;
 }
 
 export function resolveStateFile(cwd) {
@@ -109,6 +245,7 @@ export function saveState(cwd, state) {
     }
     removeJobFile(resolveJobFile(cwd, job.id));
     removeFileIfExists(job.logFile);
+    removeFileIfExists(job.eventFile);
   }
 
   fs.writeFileSync(resolveStateFile(cwd), `${JSON.stringify(nextState, null, 2)}\n`, "utf8");
@@ -183,6 +320,11 @@ function removeJobFile(jobFile) {
 export function resolveJobLogFile(cwd, jobId) {
   ensureStateDir(cwd);
   return path.join(resolveJobsDir(cwd), `${jobId}.log`);
+}
+
+export function resolveJobEventFile(cwd, jobId) {
+  ensureStateDir(cwd);
+  return path.join(resolveJobsDir(cwd), `${jobId}.events.jsonl`);
 }
 
 export function resolveJobFile(cwd, jobId) {
