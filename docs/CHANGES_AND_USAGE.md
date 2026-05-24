@@ -1,5 +1,44 @@
 # codex-plugin-cc-opt：变更说明与验证指南
 
+> 完整版本历史看仓库根 [`CHANGELOG.md`](../CHANGELOG.md)。下面只摘录最近两个版本的关键变化，以及所有新增功能的验证步骤。
+
+## v2.0.2 功能迭代（2026-05-24）
+
+### 新命令
+- **`/codex:diff`** — 灵活的 review 目标，支持 `--file <path>` / `--commit <sha>` / `--range <a>..<b>`，复用结构化中文 verdict。
+- **`/codex:history`** — 列本仓库（或加 `--all` 跨 workspace）历史 review/adversarial-review 结论；表格含 verdict、findings 数、summary。
+
+### 体验增强
+- **review 后自动建议 next-step**：`verdict=needs-attention` 且有 `critical`/`high` findings 时，输出尾部追加一行 `/codex:rescue --background ...`（可复制直接跑），focus 在最严重的那条 finding。
+- **后台启动统一 launch payload**：`/codex:review --background`、`/codex:adversarial-review --background`、`/codex:diff --background`、`/codex:rescue --background` 全部立即返回相同结构的告知块：
+
+  ```
+  Codex <Kind> started in the background.
+    Job id: <jobId>
+
+  Async control:
+    /codex:status <jobId>     — current state, phase, recent progress
+    /codex:observe <jobId>    — live event stream (read-only, Ctrl+C exits observer only)
+    /codex:result <jobId>     — full final output (once status is completed/failed)
+    /codex:cancel <jobId>     — abort the run
+
+  A PushNotification will fire automatically when the job finishes.
+  ```
+
+  review/adversarial/diff 底层从"Bash run_in_background 跑同步 review"改为"companion 自己 enqueue + spawn detached worker"，立即返回真实 jobId。
+
+### 工程化
+- GitHub Actions CI 现在在 PR 和 `main` push 时跑 `npm run check-version` + `npm test` + `npm run build`。
+- `npm run bump:patch|minor|major` 一键算下一个版本并同步 4 处版本号；`npm run bump-version <版本号>` 显式指定也照旧。
+- 仓库根 `CHANGELOG.md`（keep-a-changelog 格式）。
+- `.gitignore` 加 `.idea/` / `.vscode/` / `*.sw[op]` / `.DS_Store` / `Thumbs.db`。
+
+### 代码小清理
+- `getJobKindLabel(kind, jobClass)` 简化为两层映射。
+- smart estimate 阈值（30 文件 / 3000 行）提到 `SMART_ESTIMATE_THRESHOLDS` 常量，命令模板加 keep-in-sync 注释。
+
+---
+
 ## v2.0.1 紧急修复（2026-05-23）
 
 **2.0.0 的问题**：在大 diff（>50 文件 / >10k 行）场景下，`/codex:review` 与 `/codex:adversarial-review` 在用户回答推荐弹窗 `Wait for results` 之后 **不会真正启动 review** —— `/codex:status` 显示无 job 在跑，用户看不到任何 `[codex] ...` 流式输出。
@@ -254,6 +293,85 @@ pgrep -fc app-server-broker
 ```text
 /codex:result task-xxxxxxxx
 ```
+
+### 场景 9：v2.0.2 — `/codex:diff` 单文件 review
+
+**前置**：仓库里改了多个文件，但你只想 review 其中一个。
+
+**指令**：
+
+```text
+/codex:diff --file src/auth.js
+```
+
+或者 review 一个 commit：
+
+```text
+/codex:diff --commit HEAD~3
+```
+
+或者一段范围：
+
+```text
+/codex:diff --range main..feature/auth
+```
+
+可选追加 focus 文本：`/codex:diff --file src/auth.js focus on session lifecycle`
+
+**期望**：和 `/codex:review` 同样的结构化中文 verdict / findings / recommendations，但只针对你指定的目标。
+
+### 场景 10：v2.0.2 — `/codex:history` 查历史 review
+
+**前置**：本仓库跑过至少一次 `/codex:review`（或 `/codex:adversarial-review`、`/codex:diff`）。
+
+**指令**：
+
+```text
+/codex:history
+/codex:history --limit 5
+/codex:history --all
+```
+
+**期望**：表格输出，每行一个历史 review job：时间、kind、verdict (`approve` / `needs-attention`)、findings 数、jobId、summary。表下方提示 `/codex:result <jobId>` 看完整 verdict。
+
+### 场景 11：v2.0.2 — review 后自动建议 rescue
+
+**前置**：跑一个会 `needs-attention` 的 review（比如把一段校验代码删掉）。
+
+**指令**：
+
+```text
+/codex:review
+```
+
+**期望**：verdict 段落后面追加：
+
+```
+💡 建议下一步：
+   /codex:rescue --background 修复 <文件路径> 中的 <第一个 high/critical finding 标题>
+   （在后台让 codex 尝试自动修复；不想自动修复可忽略此提示）
+```
+
+直接复制粘贴这一条 `/codex:rescue ...` 即可让 codex 在后台修。`approve` verdict 不会追加。
+
+### 场景 12：v2.0.2 — 后台启动 launch payload（review / adversarial / diff / rescue 统一）
+
+**指令**（任一）：
+
+```text
+/codex:review --background
+/codex:adversarial-review --background
+/codex:diff --file src/auth.js --background
+/codex:rescue --background fix the failing test
+```
+
+**期望**：命令立即返回（< 1 秒），主屏幕显示固定结构的 launch payload，含：
+- `Job id: <jobId>`
+- 4 行 `/codex:status|observe|result|cancel <jobId>` 控制命令
+- `Signal file: ...` 路径
+- "A PushNotification will fire automatically when the job finishes."
+
+复制 `/codex:observe <jobId>` 在另一个终端跑就能看到实时事件流。任务完成时主线程自动收到 PushNotification。
 
 ---
 

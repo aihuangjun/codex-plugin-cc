@@ -5,13 +5,13 @@
   },
   "metadata": {
     "description": "Codex plugin for Claude Code with streaming review progress, Chinese output, and completion notifications.",
-    "version": "2.0.1"
+    "version": "2.0.2"
   },
   "plugins": [
     {
       "name": "codex",
       "description": "Use Codex from Claude Code with streaming review progress, Chinese output, and completion notifications.",
-      "version": "2.0.1",
+      "version": "2.0.2",
       "author": {
         "name": "shengxia.hj"
       },

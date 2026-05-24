@@ -1,6 +1,6 @@
 {
   "name": "@openai/codex-plugin-cc",
-  "version": "2.0.1",
+  "version": "2.0.2",
   "private": true,
   "type": "module",
   "description": "Use Codex from Claude Code to review code or delegate tasks.",
@@ -11,6 +11,9 @@
   "scripts": {
     "bump-version": "node scripts/bump-version.mjs",
     "check-version": "node scripts/bump-version.mjs --check",
+    "bump:patch": "node scripts/bump-semver.mjs patch",
+    "bump:minor": "node scripts/bump-semver.mjs minor",
+    "bump:major": "node scripts/bump-semver.mjs major",
     "prebuild": "mkdir -p plugins/codex/.generated/app-server-types && codex app-server generate-ts --out plugins/codex/.generated/app-server-types",
     "build": "tsc -p tsconfig.app-server.json",
     "test": "node --test tests/*.test.mjs"
