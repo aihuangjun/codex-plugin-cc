@@ -1,8 +1,8 @@
 {
   "name": "codex",
-  "version": "1.0.4",
-  "description": "Use Codex from Claude Code to review code or delegate tasks.",
+  "version": "2.0.0",
+  "description": "Use Codex from Claude Code with streaming review progress, Chinese output, and completion notifications.",
   "author": {
-    "name": "OpenAI"
+    "name": "shengxia.hj"
   }
 }

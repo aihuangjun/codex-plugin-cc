@@ -1,19 +1,19 @@
 {
-  "name": "openai-codex",
+  "name": "openai-codex-opt",
   "owner": {
-    "name": "OpenAI"
+    "name": "shengxia.hj"
   },
   "metadata": {
-    "description": "Codex plugins to use in Claude Code for delegation and code review.",
-    "version": "1.0.4"
+    "description": "Codex plugin for Claude Code with streaming review progress, Chinese output, and completion notifications.",
+    "version": "2.0.0"
   },
   "plugins": [
     {
       "name": "codex",
-      "description": "Use Codex from Claude Code to review code or delegate tasks.",
-      "version": "1.0.4",
+      "description": "Use Codex from Claude Code with streaming review progress, Chinese output, and completion notifications.",
+      "version": "2.0.0",
       "author": {
-        "name": "OpenAI"
+        "name": "shengxia.hj"
       },
       "source": "./plugins/codex"
     }
