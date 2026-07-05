@@ -602,6 +602,12 @@ rl.on("line", (line) => {
 	          interruptibleTurns.set(turnId, { threadId: thread.id, timer });
 	        } else if (BEHAVIOR === "slow-task") {
 	          emitTurnCompletedLater(thread.id, turnId, items, 400);
+	        } else if (BEHAVIOR === "silent-after-error") {
+	          // Reproduce the reported hang: the app-server starts the turn, reports
+	          // an error, and then never sends turn/completed (nor a final_answer
+	          // item), so nothing resolves the turn and the client would wait forever.
+	          send({ method: "turn/started", params: { threadId: thread.id, turn: buildTurn(turnId) } });
+	          send({ method: "error", params: { threadId: thread.id, turnId, error: { message: "Simulated mid-turn failure with no turn/completed." } } });
 	        } else {
 	          emitTurnCompleted(thread.id, turnId, items);
 	        }

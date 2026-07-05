@@ -51,6 +51,28 @@ const DEFAULT_CONTINUE_PROMPT =
 const EXTERNAL_AGENT_IMPORT_COMPLETED = "externalAgentConfig/import/completed";
 const EXTERNAL_AGENT_IMPORT_TIMEOUT_MS = 2 * 60 * 1000;
 
+// Safety net for turn capture: if the Codex app-server goes completely silent
+// for this long without sending a terminal `turn/completed` (or any other
+// notification), abort the turn instead of hanging the Claude Code session
+// forever. Total silence for this long means the shared broker is stuck holding
+// its stream slot, which also makes every other command return "broker is busy".
+// Reset on every turn notification, so long-but-active turns are unaffected.
+// Override with CODEX_COMPANION_TURN_IDLE_TIMEOUT_MS; set it to 0 to disable.
+const DEFAULT_TURN_IDLE_TIMEOUT_MS = 10 * 60 * 1000;
+export const TURN_IDLE_TIMEOUT_ENV = "CODEX_COMPANION_TURN_IDLE_TIMEOUT_MS";
+
+function resolveTurnIdleTimeoutMs(env = process.env) {
+  const raw = env?.[TURN_IDLE_TIMEOUT_ENV];
+  if (raw === undefined || raw === null || raw === "") {
+    return DEFAULT_TURN_IDLE_TIMEOUT_MS;
+  }
+  const parsed = Number(raw);
+  if (!Number.isFinite(parsed) || parsed < 0) {
+    return DEFAULT_TURN_IDLE_TIMEOUT_MS;
+  }
+  return parsed;
+}
+
 function cleanCodexStderr(stderr) {
   return stderr
     .split(/\r?\n/)
@@ -325,6 +347,7 @@ function createTurnCaptureState(threadId, options = {}) {
     pendingCollaborations: new Set(),
     activeSubagentTurns: new Set(),
     completionTimer: null,
+    idleTimer: null,
     lastAgentMessage: "",
     reviewText: "",
     reasoningSummary: [],
@@ -349,6 +372,7 @@ function completeTurn(state, turn = null, options = {}) {
   }
 
   clearCompletionTimer(state);
+  clearIdleWatchdog(state);
   state.completed = true;
 
   if (turn) {
@@ -556,11 +580,54 @@ function applyTurnNotification(state, message) {
   }
 }
 
+function clearIdleWatchdog(state) {
+  if (state.idleTimer) {
+    clearTimeout(state.idleTimer);
+    state.idleTimer = null;
+  }
+}
+
 async function captureTurn(client, threadId, startRequest, options = {}) {
   const state = createTurnCaptureState(threadId, options);
   const previousHandler = client.notificationHandler;
 
+  // Two independent guards so a turn can never hang the Claude Code session
+  // forever: (1) an idle watchdog that fires after prolonged app-server silence,
+  // and (2) the client-exit signal, since app-server crashes/disconnects reject
+  // pending requests but never touch `state.completion`. Either one aborts the
+  // turn, which lets the caller close the client and free the shared broker slot.
+  const idleTimeoutMs = resolveTurnIdleTimeoutMs(options.env ?? client.options?.env ?? process.env);
+  const armIdleWatchdog = () => {
+    if (!idleTimeoutMs || state.completed) {
+      return;
+    }
+    clearIdleWatchdog(state);
+    state.idleTimer = setTimeout(() => {
+      state.idleTimer = null;
+      if (state.completed) {
+        return;
+      }
+      state.rejectCompletion(
+        new Error(
+          `Codex went silent for ${Math.round(idleTimeoutMs / 1000)}s without completing the turn; aborting so the session does not hang. ` +
+            `Retry, or raise/disable ${TURN_IDLE_TIMEOUT_ENV} if this was a legitimately long, quiet run.`
+        )
+      );
+    }, idleTimeoutMs);
+    state.idleTimer.unref?.();
+  };
+
+  const exitError = new Error("Codex app-server connection closed before the turn completed.");
+  client.exitPromise?.then(() => {
+    if (!state.completed) {
+      state.rejectCompletion(client.exitError ?? exitError);
+    }
+  });
+
   client.setNotificationHandler((message) => {
+    // Any notification is progress: reset the silence watchdog.
+    armIdleWatchdog();
+
     if (!state.turnId) {
       state.bufferedNotifications.push(message);
       return;
@@ -582,6 +649,7 @@ async function captureTurn(client, threadId, startRequest, options = {}) {
   });
 
   try {
+    armIdleWatchdog();
     const response = await startRequest();
     options.onResponse?.(response, state);
     state.turnId = response.turn?.id ?? null;
@@ -605,6 +673,7 @@ async function captureTurn(client, threadId, startRequest, options = {}) {
 
     return await state.completion;
   } finally {
+    clearIdleWatchdog(state);
     clearCompletionTimer(state);
     client.setNotificationHandler(previousHandler ?? null);
   }

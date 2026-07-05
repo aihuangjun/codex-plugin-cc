@@ -456,6 +456,32 @@ test("review includes reasoning output when the app server returns it", () => {
   assert.match(result.stdout, /Inspected the prompt, gathered evidence, and checked the highest-risk paths first/);
 });
 
+test("a foreground turn aborts instead of hanging when the app-server goes silent without turn/completed", () => {
+  const repo = makeTempDir();
+  const binDir = makeTempDir();
+  installFakeCodex(binDir, "silent-after-error");
+  initGitRepo(repo);
+  fs.writeFileSync(path.join(repo, "README.md"), "hello\n");
+  run("git", ["add", "README.md"], { cwd: repo });
+  run("git", ["commit", "-m", "init"], { cwd: repo });
+
+  const started = Date.now();
+  // The idle watchdog is what must fire here; keep it short so the test is fast.
+  // The spawnSync timeout is a backstop: if the watchdog ever regressed and the
+  // process truly hung, we want an assertion failure, not a wedged test run.
+  const result = run("node", [SCRIPT, "task", "do the thing"], {
+    cwd: repo,
+    env: { ...buildEnv(binDir), CODEX_COMPANION_TURN_IDLE_TIMEOUT_MS: "800" },
+    timeout: 20000
+  });
+  const elapsed = Date.now() - started;
+
+  assert.notEqual(result.status, 0, "a silent, never-completing turn must fail rather than succeed");
+  assert.equal(result.signal, null, `process was killed by the backstop timeout instead of self-aborting: ${result.stderr}`);
+  assert.ok(elapsed < 15000, `expected the watchdog to abort quickly, took ${elapsed}ms`);
+  assert.match(result.stderr, /went silent|did not|hang|abort/i);
+});
+
 test("review logs reasoning summaries and review output to the job log", () => {
   const repo = makeTempDir();
   const binDir = makeTempDir();
