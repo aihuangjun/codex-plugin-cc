@@ -62,6 +62,7 @@ Full release history: [`CHANGELOG.md`](CHANGELOG.md).
 | `/codex:adversarial-review [focus]` | Same target selection as `/codex:review` but framed as a challenge review (questions the design, looks for failure modes). |
 | `/codex:diff --file <path> \| --commit <sha> \| --range <a>..<b>` | Targeted diff review — single file, single commit, or arbitrary range. |
 | `/codex:rescue [task]` | Delegate code change / debugging work to Codex. Supports `--background`, `--worktree`, `--resume`, `--fresh`, `--model`, `--effort`. |
+| `/codex:transfer [--source <claude-jsonl>]` | Hand off the current Claude Code session into a resumable Codex thread and print a `codex resume <session-id>` command. Source must be under `~/.claude/projects`; `--source` is a manual override. |
 | `/codex:status [jobId] [--all]` | Show queued / running jobs (and recent finished). `--all` includes other workspaces. |
 | `/codex:observe [jobId]` | Live, color-coded event stream for any running / finished job. Read-only — doesn't lock the Codex thread. |
 | `/codex:result [jobId]` | Print the stored final output for a finished job. |
