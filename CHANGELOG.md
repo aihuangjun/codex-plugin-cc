@@ -10,7 +10,11 @@ For end-user installation and verification scenarios, see [`docs/CHANGES_AND_USA
 
 ## [Unreleased]
 
-_No unreleased changes yet. New entries land here during the next development cycle and roll into the next tagged version on release._
+### Added
+- **`/codex:transfer`** — merged from upstream `openai/codex-plugin-cc` (#374, shipped there in `1.0.5`). Hands off the current Claude Code session into a resumable Codex thread and prints a `codex resume <session-id>` command. Uses Codex's external-agent session importer; the `SessionStart` hook supplies the transcript path automatically, with `--source <claude-jsonl>` as a manual override. The source must live under `~/.claude/projects`, and older Codex builds without session-import support surface an actionable upgrade error. (Upstream's own `1.0.5` version bump was intentionally not taken — this fork keeps its own `2.0.x` line.)
+
+### Fixed
+- **Foreground Codex turns can no longer hang the Claude Code session forever** (the reported "broker busy / no response, Claude Code keeps waiting" stall). `captureTurn` awaited turn completion with no upper bound, so it hung indefinitely when the app-server emitted an `error` (or simply stalled) without ever sending `turn/completed`, or when the app-server crashed/disconnected mid-turn (connection close rejects pending *requests* but never resolved the turn-completion promise). A wedged foreground turn also kept the shared broker's stream slot open, so every other command then returned `BROKER_BUSY` ("queue full"). Fix adds two independent guards: an idle watchdog that aborts after prolonged app-server silence (reset on every turn notification; configurable via `CODEX_COMPANION_TURN_IDLE_TIMEOUT_MS`, default 10 minutes, `0` disables) and client-exit wiring into the completion promise. Either one now fails the turn fast and closes the client, which frees the broker slot and unblocks other commands. Covered by a new `silent-after-error` regression test.
 
 ## [2.0.3] — 2026-05-24
 
