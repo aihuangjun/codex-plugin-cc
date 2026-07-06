@@ -10,6 +10,10 @@ For end-user installation and verification scenarios, see [`docs/CHANGES_AND_USA
 
 ## [Unreleased]
 
+_No unreleased changes yet. New entries land here during the next development cycle and roll into the next tagged version on release._
+
+## [2.0.4] — 2026-07-05
+
 ### Added
 - **`/codex:transfer`** — merged from upstream `openai/codex-plugin-cc` (#374, shipped there in `1.0.5`). Hands off the current Claude Code session into a resumable Codex thread and prints a `codex resume <session-id>` command. Uses Codex's external-agent session importer; the `SessionStart` hook supplies the transcript path automatically, with `--source <claude-jsonl>` as a manual override. The source must live under `~/.claude/projects`, and older Codex builds without session-import support surface an actionable upgrade error. (Upstream's own `1.0.5` version bump was intentionally not taken — this fork keeps its own `2.0.x` line.)
 
