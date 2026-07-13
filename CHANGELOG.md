@@ -12,6 +12,15 @@ For end-user installation and verification scenarios, see [`docs/CHANGES_AND_USA
 
 _No unreleased changes yet. New entries land here during the next development cycle and roll into the next tagged version on release._
 
+## [2.0.5] — 2026-07-13
+
+### Fixed
+- **`/codex:rescue` no longer breaks by silently swapping in an unsupported model.** The rescue subagent (an LLM) repeatedly injected a `--model` value inferred from the task text — bogus tokens like `pytest` / `py_compile`, or real-but-account-unsupported models like `o3` / `gpt-4.1` — which overrode the model configured in `~/.codex/config.toml` and made the run fail with `The 'X' model is not supported when using Codex with a ChatGPT account`. Two-layer fix:
+  - **Runtime guarantee (deterministic):** `task` now ignores `--model` and always uses the Codex-configured default model, so a mis-injected model can no longer take effect. Per-run overrides are still available by setting `CODEX_COMPANION_ALLOW_MODEL_OVERRIDE=1`; when a `--model` is dropped, the run prints a one-line note explaining why and how to re-enable overrides. (`codex-companion.mjs` gained a `main()` guard so its helpers are unit-testable.)
+  - **Actionable error:** if a model is ever rejected by the backend (e.g. with overrides enabled), the task failure now appends a clear hint naming the rejected model and telling the user to retry without `--model` or pick a supported one, instead of surfacing only the raw backend error.
+  - **Instruction hardening:** the `codex:rescue` command, the `codex-rescue` agent, and the `codex-cli-runtime` skill now explicitly forbid inferring a model name from the task text (tool/file/framework names in the prompt are never model selections).
+  - Covered by new `resolveTaskModel` / `describeModelRejection` unit tests plus runtime tests proving `--model` is ignored by default and honored only when the override env is set.
+
 ## [2.0.4] — 2026-07-05
 
 ### Added

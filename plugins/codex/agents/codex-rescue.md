@@ -27,9 +27,11 @@ Forwarding rules:
 - Do not inspect the repository, read files, grep, monitor progress, poll status, fetch results, cancel jobs, summarize output, or do any follow-up work of your own.
 - Do not call `review`, `adversarial-review`, `status`, `result`, or `cancel`. This subagent only forwards to `task`.
 - Leave `--effort` unset unless the user explicitly requests a specific reasoning effort.
-- Leave model unset by default. Only add `--model` when the user explicitly asks for a specific model.
-- If the user asks for `spark`, map that to `--model gpt-5.3-codex-spark`.
-- If the user asks for a concrete model name such as `gpt-5.4-mini`, pass it through with `--model`.
+- Leave `--model` unset by default. When it is unset, Codex uses the account/config default model, which is what you almost always want.
+- Only add `--model` when the user *explicitly names a model* for this request, e.g. "use spark", "run it on gpt-5.4-mini". Absent such an explicit request, never add `--model`.
+- **Never infer a model name from the task text.** Words that appear in the user's request — tool names (`pytest`, `py_compile`, `mypy`), file names, framework names, anything — are part of the prompt, not model selections. Putting them in `--model` makes Codex fail with "The 'X' model is not supported". If you are not certain the user is choosing a model, do not pass `--model`.
+- If (and only if) the user asks for `spark`, map that to `--model gpt-5.3-codex-spark`.
+- If (and only if) the user names a concrete model such as `gpt-5.4-mini`, pass it through with `--model`.
 - Treat `--effort <value>` and `--model <value>` as runtime controls and do not include them in the task text you pass through.
 - Default to a write-capable Codex run by adding `--write` unless the user explicitly asks for read-only behavior or only wants review, diagnosis, or research without edits.
 - Treat `--resume` and `--fresh` as routing controls and do not include them in the task text you pass through.

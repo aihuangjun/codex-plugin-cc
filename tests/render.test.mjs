@@ -1,7 +1,45 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 
-import { renderReviewResult, renderStoredJobResult } from "../plugins/codex/scripts/lib/render.mjs";
+import {
+  renderReviewResult,
+  renderStoredJobResult,
+  renderTaskResult,
+  describeModelRejection
+} from "../plugins/codex/scripts/lib/render.mjs";
+
+test("describeModelRejection returns an actionable hint for backend model rejections", () => {
+  const hint = describeModelRejection(
+    "The 'pytest' model is not supported when using Codex with a ChatGPT account.",
+    "pytest"
+  );
+  assert.ok(hint, "expected a hint for a model-not-supported failure");
+  assert.match(hint, /--model pytest/);
+  assert.match(hint, /retry without `--model`/);
+});
+
+test("describeModelRejection ignores unrelated failures", () => {
+  assert.equal(describeModelRejection("Codex went silent for 600s without completing the turn.", null), null);
+  assert.equal(describeModelRejection("", "pytest"), null);
+  assert.equal(describeModelRejection(null, null), null);
+});
+
+test("renderTaskResult appends the model hint on a model-rejection failure", () => {
+  const output = renderTaskResult(
+    {
+      rawOutput: "",
+      failureMessage: "The 'o3' model is not supported when using Codex with a ChatGPT account."
+    },
+    { title: "Rescue task", requestedModel: "o3" }
+  );
+  assert.match(output, /is not supported/);
+  assert.match(output, /Codex rejected the requested model \(`--model o3`\)/);
+});
+
+test("renderTaskResult leaves a successful task output untouched", () => {
+  const output = renderTaskResult({ rawOutput: "## Done\nAll good." }, { title: "Rescue task" });
+  assert.equal(output, "## Done\nAll good.\n");
+});
 
 test("renderReviewResult degrades gracefully when JSON is missing required review fields", () => {
   const output = renderReviewResult(

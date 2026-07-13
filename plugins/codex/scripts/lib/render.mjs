@@ -372,6 +372,26 @@ export function renderHistoryReport(report) {
   return lines.join("\n");
 }
 
+// Codex only knows which models an account may use server-side, so the plugin
+// cannot validate `--model` locally (a hardcoded allowlist would wrongly reject
+// account-specific or newly released models). Instead, when the backend rejects
+// the model, turn its terse "model is not supported" reply into an actionable
+// hint. Matches both real-but-unavailable models (o3, gpt-4.1, …) and bogus
+// tokens that leaked into the flag (pytest, py_compile, …).
+const MODEL_REJECTION_PATTERN = /\bmodel\b[^\n]*\bnot supported\b/i;
+
+export function describeModelRejection(failureMessage, requestedModel) {
+  const message = String(failureMessage ?? "");
+  if (!message || !MODEL_REJECTION_PATTERN.test(message)) {
+    return null;
+  }
+  const named = requestedModel ? ` (\`--model ${requestedModel}\`)` : "";
+  return [
+    `Codex rejected the requested model${named}. Whether a model is available is decided by your Codex account, not this plugin.`,
+    "Fix: retry without `--model` to use your account default (if you did not ask for a specific model, it was set in error), or pass a model your account supports."
+  ].join("\n");
+}
+
 export function renderTaskResult(parsedResult, meta) {
   const rawOutput = typeof parsedResult?.rawOutput === "string" ? parsedResult.rawOutput : "";
   const worktreeBlock = renderWorktreesBlock(meta);
@@ -381,7 +401,11 @@ export function renderTaskResult(parsedResult, meta) {
     return worktreeBlock ? `${base}\n${worktreeBlock}` : base;
   }
 
-  const message = String(parsedResult?.failureMessage ?? "").trim() || "Codex did not return a final message.";
+  let message = String(parsedResult?.failureMessage ?? "").trim() || "Codex did not return a final message.";
+  const modelHint = describeModelRejection(message, meta?.requestedModel);
+  if (modelHint) {
+    message = `${message}\n\n${modelHint}`;
+  }
   const base = `${message}\n`;
   return worktreeBlock ? `${base}\n${worktreeBlock}` : base;
 }

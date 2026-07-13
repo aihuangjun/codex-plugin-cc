@@ -74,7 +74,8 @@ Operating rules:
 - Do not paraphrase, summarize, rewrite, or add commentary before or after it.
 - Do not ask the subagent to inspect files, monitor progress, poll `/codex:status`, fetch `/codex:result`, call `/codex:cancel`, summarize output, or do follow-up work of its own.
 - Leave `--effort` unset unless the user explicitly asks for a specific reasoning effort.
-- Leave the model unset unless the user explicitly asks for one. If they ask for `spark`, map it to `gpt-5.3-codex-spark`.
+- Leave the model unset unless the user explicitly asks for one. When it is unset, Codex uses the account/config default model — that is the intended default. If they ask for `spark`, map it to `gpt-5.3-codex-spark`.
+- Never infer a model name from the task text. Words in the request such as tool names (`pytest`, `py_compile`), file names, or framework names are part of the prompt, not a model selection — passing them as `--model` makes Codex fail with "The 'X' model is not supported".
 - Leave `--resume` and `--fresh` in the forwarded request. The subagent handles that routing when it builds the `task` command.
 - If the helper reports that Codex is missing or unauthenticated, stop and tell the user to run `/codex:setup`.
 - If the user did not supply a request, ask what Codex should investigate or fix.

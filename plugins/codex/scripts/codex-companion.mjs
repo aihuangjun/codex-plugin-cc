@@ -75,6 +75,13 @@ const DEFAULT_STATUS_WAIT_TIMEOUT_MS = 240000;
 const DEFAULT_STATUS_POLL_INTERVAL_MS = 2000;
 const VALID_REASONING_EFFORTS = new Set(["none", "minimal", "low", "medium", "high", "xhigh"]);
 const MODEL_ALIASES = new Map([["spark", "gpt-5.3-codex-spark"]]);
+// A `task` run defaults to whatever model is configured in Codex (`~/.codex/config.toml`).
+// The rescue subagent (an LLM) has repeatedly injected a bogus/unsupported `--model`
+// (e.g. `pytest`, `py_compile`), overriding that default and making every rescue fail
+// with "The 'X' model is not supported". To guarantee the configured default is used,
+// `task` ignores `--model` unless the operator explicitly opts into per-run overrides
+// via this env var. Set it to 1/true to allow `--model` to take effect again.
+const MODEL_OVERRIDE_ENV = "CODEX_COMPANION_ALLOW_MODEL_OVERRIDE";
 const STOP_REVIEW_TASK_MARKER = "Run a stop-gate review of the previous Claude turn.";
 
 // 这两个阈值同时硬编码在 commands/review.md 和 commands/adversarial-review.md 的 Step 3 里。
@@ -139,6 +146,26 @@ function normalizeRequestedModel(model) {
     return null;
   }
   return MODEL_ALIASES.get(normalized.toLowerCase()) ?? normalized;
+}
+
+export function isModelOverrideAllowed(env = process.env) {
+  const raw = env?.[MODEL_OVERRIDE_ENV];
+  if (raw == null) {
+    return false;
+  }
+  const normalized = String(raw).trim().toLowerCase();
+  return normalized === "1" || normalized === "true" || normalized === "yes" || normalized === "on";
+}
+
+// Resolve the model for a `task` run while guaranteeing the Codex-configured
+// default is used unless per-run overrides are explicitly enabled. Returns the
+// model to use (null = use the config default) plus an optional note to surface.
+export function resolveTaskModel(requestedModel, env = process.env) {
+  const model = normalizeRequestedModel(requestedModel);
+  if (!model || isModelOverrideAllowed(env)) {
+    return { model, ignoredModel: null };
+  }
+  return { model: null, ignoredModel: model };
 }
 
 function normalizeReasoningEffort(effort) {
@@ -477,6 +504,7 @@ async function executeTaskRun(request) {
       title: taskMetadata.title,
       jobId: request.jobId ?? null,
       write: Boolean(request.write),
+      requestedModel: request.model ?? null,
       worktreePath: request.worktreePath ?? null,
       worktreeBranch: request.worktreeBranch ?? null,
       worktreeBaseBranch: request.worktreeBaseBranch ?? null
@@ -890,7 +918,13 @@ async function handleTask(argv) {
 
   const cwd = resolveCommandCwd(options);
   const workspaceRoot = resolveCommandWorkspace(options);
-  const model = normalizeRequestedModel(options.model);
+  const { model, ignoredModel } = resolveTaskModel(options.model);
+  if (ignoredModel) {
+    process.stderr.write(
+      `[codex] Ignoring --model ${ignoredModel}; using the model configured in Codex (~/.codex/config.toml). ` +
+        `Set ${MODEL_OVERRIDE_ENV}=1 to allow per-run model overrides.\n`
+    );
+  }
   const effort = normalizeReasoningEffort(options.effort);
   const prompt = readTaskPrompt(cwd, options, positionals);
 
@@ -1283,8 +1317,13 @@ async function main() {
   }
 }
 
-main().catch((error) => {
-  const message = error instanceof Error ? error.message : String(error);
-  process.stderr.write(`${message}\n`);
-  process.exitCode = 1;
-});
+// Only run the CLI when executed directly (`node codex-companion.mjs …`), so the
+// module's exported helpers can be imported by unit tests without triggering main().
+const invokedDirectly = process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url);
+if (invokedDirectly) {
+  main().catch((error) => {
+    const message = error instanceof Error ? error.message : String(error);
+    process.stderr.write(`${message}\n`);
+    process.exitCode = 1;
+  });
+}

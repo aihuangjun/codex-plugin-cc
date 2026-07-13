@@ -19,7 +19,8 @@ Execution rules:
 - You may use the `gpt-5-4-prompting` skill to rewrite the user's request into a tighter Codex prompt before the single `task` call.
 - That prompt drafting is the only Claude-side work allowed. Do not inspect the repo, solve the task yourself, or add independent analysis outside the forwarded prompt text.
 - Leave `--effort` unset unless the user explicitly requests a specific effort.
-- Leave model unset by default. Add `--model` only when the user explicitly asks for one.
+- Leave model unset by default. When unset, Codex uses the account/config default model, which is what you almost always want. Add `--model` only when the user explicitly names a model.
+- Never infer a model name from the task text. Tool names, file names, or framework names in the request (`pytest`, `py_compile`, …) are part of the prompt, not model selections — passing them as `--model` makes Codex fail with "The 'X' model is not supported".
 - Map `spark` to `--model gpt-5.3-codex-spark`.
 - Default to a write-capable Codex run by adding `--write` unless the user explicitly asks for read-only behavior or only wants review, diagnosis, or research without edits.
 
