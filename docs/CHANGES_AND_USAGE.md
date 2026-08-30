@@ -2,7 +2,7 @@
 
 > 完整版本历史看仓库根 [`CHANGELOG.md`](../CHANGELOG.md)。本文聚焦：**怎么装** + **每个新能力怎么验证**。
 >
-> 版本：**2.0.2** ｜ marketplace：`openai-codex-opt` ｜ 作者：`shengxia.hj`
+> 版本：**2.0.6** ｜ marketplace：`openai-codex-opt` ｜ 作者：`shengxia.hj`
 > 上游：`openai/codex-plugin-cc` 1.0.4 ｜ 还合并了 `dragon84867/codex-plugin-cc` 1.0.4 → 1.2.6 的底层修复
 
 ---

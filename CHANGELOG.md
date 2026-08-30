@@ -10,6 +10,10 @@ For end-user installation and verification scenarios, see [`docs/CHANGES_AND_USA
 
 ## [Unreleased]
 
+_No unreleased changes yet. New entries land here during the next development cycle and roll into the next tagged version on release._
+
+## [2.0.6] — 2026-08-30
+
 ### Fixed
 - **Background tasks (`task --background`, `review --background`) no longer get stuck in `queued` forever.** `enqueueBackgroundTask` spawned the detached worker *before* writing the job record; the worker's first action is to read that record, and whenever `git rev-parse` in the workspace was slow (large repos such as a home directory under git) it reliably won the race, threw `No stored job found`, and died with its stdio discarded — leaving no status change, no `.done` signal, and a Monitor that never fired. Fix: the full record (including the request payload) is persisted before the worker exists, the worker retries the lookup for up to 10 s, its stdout/stderr are appended to the job log, and any failure before `runTrackedJob` takes over now marks the job `failed` and writes the signal file (also covers `uncaughtException` / `unhandledRejection`). A worker started for a job that is no longer `queued` exits without rerunning it.
 - **Dead workers are reconciled instead of shown as active forever.** `status` (including `--all`), `status --wait`, `result` and `cancel` now check whether the recorded worker pid is alive (a job that started before the last boot is treated as dead even if its pid number was reused); a `queued`/`running` job whose process is gone (crash, `kill`, harness timeout, reboot) is converted to `failed` with an explanatory message and a `.done` signal. A terminal job file that the state index missed is adopted the same way.
