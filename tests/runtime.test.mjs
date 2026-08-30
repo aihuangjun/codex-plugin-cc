@@ -1222,8 +1222,8 @@ test("status shows phases, hints, and the latest finished job", () => {
             threadId: "thr_1",
             summary: "Review working tree diff",
             logFile,
-            createdAt: "2026-03-18T15:30:00.000Z",
-            updatedAt: "2026-03-18T15:30:03.000Z"
+            createdAt: new Date(Date.now() - 60000).toISOString(),
+            updatedAt: new Date(Date.now() - 58000).toISOString()
           },
           {
             id: "review-done",
@@ -1298,8 +1298,8 @@ test("status without a job id only shows jobs from the current Claude session", 
             threadId: "thr_current",
             summary: "Current session review",
             logFile: currentLog,
-            createdAt: "2026-03-18T15:30:00.000Z",
-            updatedAt: "2026-03-18T15:30:00.000Z"
+            createdAt: new Date(Date.now() - 60000).toISOString(),
+            updatedAt: new Date(Date.now() - 58000).toISOString()
           },
           {
             id: "review-other",
@@ -1366,8 +1366,8 @@ test("status preserves adversarial review kind labels", () => {
             threadId: "thr_adv_live",
             summary: "Adversarial review current changes",
             logFile,
-            createdAt: "2026-03-18T15:30:00.000Z",
-            updatedAt: "2026-03-18T15:30:00.000Z"
+            createdAt: new Date(Date.now() - 60000).toISOString(),
+            updatedAt: new Date(Date.now() - 58000).toISOString()
           },
           {
             id: "review-adv",
@@ -1440,9 +1440,9 @@ test("status --wait times out cleanly when a job is still active", () => {
             jobClass: "task",
             summary: "Investigate flaky test",
             logFile,
-            createdAt: "2026-03-18T15:30:00.000Z",
-            startedAt: "2026-03-18T15:30:01.000Z",
-            updatedAt: "2026-03-18T15:30:02.000Z"
+            createdAt: new Date(Date.now() - 60000).toISOString(),
+            startedAt: new Date(Date.now() - 59000).toISOString(),
+            updatedAt: new Date(Date.now() - 58000).toISOString()
           }
         ]
       },
@@ -1707,9 +1707,9 @@ test("cancel stops an active background job and marks it cancelled", async (t) =
             summary: "Investigate flaky test",
             pid: sleeper.pid,
             logFile,
-            createdAt: "2026-03-18T15:30:00.000Z",
-            startedAt: "2026-03-18T15:30:01.000Z",
-            updatedAt: "2026-03-18T15:30:02.000Z"
+            createdAt: new Date(Date.now() - 60000).toISOString(),
+            startedAt: new Date(Date.now() - 59000).toISOString(),
+            updatedAt: new Date(Date.now() - 58000).toISOString()
           }
         ]
       },
@@ -1980,8 +1980,8 @@ test("session end fully cleans up jobs for the ending session", async (t) => {
             sessionId: "sess-current",
             pid: sleeper.pid,
             logFile: runningLog,
-            createdAt: "2026-03-18T15:32:00.000Z",
-            updatedAt: "2026-03-18T15:33:00.000Z"
+            createdAt: new Date(Date.now() - 60000).toISOString(),
+            updatedAt: new Date(Date.now() - 58000).toISOString()
           },
           {
             id: "review-other",
@@ -1989,8 +1989,8 @@ test("session end fully cleans up jobs for the ending session", async (t) => {
             title: "Codex Review",
             sessionId: "sess-other",
             logFile: otherSessionLog,
-            createdAt: "2026-03-18T15:34:00.000Z",
-            updatedAt: "2026-03-18T15:35:00.000Z"
+            createdAt: new Date(Date.now() - 60000).toISOString(),
+            updatedAt: new Date(Date.now() - 58000).toISOString()
           }
         ]
       },
@@ -2122,8 +2122,8 @@ test("stop hook logs running tasks to stderr without blocking when the review ga
             jobClass: "task",
             sessionId: "sess-current",
             logFile: runningLog,
-            createdAt: "2026-03-18T15:32:00.000Z",
-            updatedAt: "2026-03-18T15:33:00.000Z"
+            createdAt: new Date(Date.now() - 60000).toISOString(),
+            updatedAt: new Date(Date.now() - 58000).toISOString()
           }
         ]
       },
