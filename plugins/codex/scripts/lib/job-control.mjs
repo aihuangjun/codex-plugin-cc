@@ -1,16 +1,116 @@
 import fs from "node:fs";
+import os from "node:os";
 
 import { getSessionRuntimeStatus } from "./codex.mjs";
+import { isProcessAlive } from "./process.mjs";
 import {
   collectWorkspaceJobsAcrossRoots,
   findJobByIdAcrossWorkspaces,
   getConfig,
   listJobs,
   readJobFile,
-  resolveJobFile
+  resolveJobFile,
+  resolveJobsDir,
+  upsertJob,
+  writeJobFile
 } from "./state.mjs";
-import { SESSION_ID_ENV } from "./tracked-jobs.mjs";
+import { appendLogLine, SESSION_ID_ENV, writeCompletionSignalFile } from "./tracked-jobs.mjs";
 import { resolveWorkspaceRoot } from "./workspace.mjs";
+
+const TERMINAL_STATUSES = new Set(["completed", "failed", "cancelled"]);
+// A freshly enqueued job may briefly have no pid while the parent is still
+// spawning the worker; do not declare it dead inside this window.
+const STALE_JOB_GRACE_MS = 5000;
+
+function readStoredJobOrNull(workspaceRoot, jobId) {
+  try {
+    const jobFile = resolveJobFile(workspaceRoot, jobId);
+    return fs.existsSync(jobFile) ? readJobFile(jobFile) : null;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Detect jobs whose worker process is gone without leaving a terminal state
+ * (crashed, killed, machine rebooted) and convert them to `failed` so status,
+ * result, cancel and Monitor-based waiters stop treating them as active.
+ * Returns the reconciled list; callers keep using it like the input.
+ */
+export function reconcileStaleJobs(workspaceRoot, jobs, options = {}) {
+  const alive = options.isProcessAlive ?? isProcessAlive;
+  const now = options.now ?? Date.now();
+  const jobsDir = resolveJobsDir(workspaceRoot);
+
+  return jobs.map((job) => {
+    if (!job || (job.status !== "queued" && job.status !== "running")) {
+      return job;
+    }
+
+    const stored = readStoredJobOrNull(workspaceRoot, job.id);
+    if (stored && TERMINAL_STATUSES.has(stored.status)) {
+      // The worker finished but the state index missed the update.
+      const patch = {
+        id: job.id,
+        status: stored.status,
+        phase: stored.phase ?? stored.status,
+        pid: null,
+        errorMessage: stored.errorMessage ?? job.errorMessage ?? null,
+        completedAt: stored.completedAt ?? new Date(now).toISOString()
+      };
+      upsertJob(workspaceRoot, patch);
+      return { ...job, ...patch };
+    }
+
+    const pid = Number.isFinite(job.pid) ? job.pid : Number.isFinite(stored?.pid) ? stored.pid : null;
+    // A job started before the last boot cannot have a live worker even if the
+    // pid number has since been reused by an unrelated process.
+    const bootTime = now - (options.uptimeSeconds ?? os.uptime()) * 1000;
+    const startedAt = Date.parse(job.startedAt ?? job.createdAt ?? "") || 0;
+    const startedBeforeBoot = startedAt > 0 && startedAt < bootTime;
+    if (pid !== null && !startedBeforeBoot && alive(pid)) {
+      return job;
+    }
+
+    const lastTouch = Date.parse(job.updatedAt ?? job.createdAt ?? "") || 0;
+    if (pid === null && now - lastTouch < STALE_JOB_GRACE_MS) {
+      return job;
+    }
+
+    const errorMessage =
+      pid === null
+        ? "No worker process was recorded for this job; it never started."
+        : startedBeforeBoot
+          ? `Worker process ${pid} predates the last system boot and cannot be running.`
+          : `Worker process ${pid} exited before the job finished.`;
+    const completedAt = new Date(now).toISOString();
+    const patch = {
+      id: job.id,
+      status: "failed",
+      phase: "failed",
+      pid: null,
+      errorMessage,
+      completedAt
+    };
+    try {
+      appendLogLine(stored?.logFile ?? job.logFile ?? null, `Marked failed by reconciliation: ${errorMessage}`);
+    } catch {
+      // best-effort
+    }
+    try {
+      writeJobFile(workspaceRoot, job.id, { ...(stored ?? job), ...patch });
+    } catch {
+      // best-effort
+    }
+    upsertJob(workspaceRoot, patch);
+    writeCompletionSignalFile(jobsDir, job.id, "failed", errorMessage);
+    return { ...job, ...patch };
+  });
+}
+
+function listReconciledJobs(workspaceRoot) {
+  return reconcileStaleJobs(workspaceRoot, listJobs(workspaceRoot));
+}
 
 export const DEFAULT_MAX_STATUS_JOBS = 8;
 export const DEFAULT_MAX_PROGRESS_LINES = 4;
@@ -234,9 +334,12 @@ function findCrossWorkspaceMatch(reference, predicate) {
 export function buildStatusSnapshot(cwd, options = {}) {
   const workspaceRoot = resolveWorkspaceRoot(cwd);
   const config = getConfig(workspaceRoot);
+  // Reconcile the current root first so `--all` (which merges legacy roots)
+  // also reflects dead workers without writing into foreign state roots.
+  const currentJobs = listReconciledJobs(workspaceRoot);
   const rawJobs = options.all
     ? collectWorkspaceJobsAcrossRoots(workspaceRoot)
-    : filterJobsForCurrentSession(listJobs(workspaceRoot), options);
+    : filterJobsForCurrentSession(currentJobs, options);
   const jobs = sortJobsNewestFirst(rawJobs);
   const maxJobs = options.maxJobs ?? DEFAULT_MAX_STATUS_JOBS;
   const maxProgressLines = options.maxProgressLines ?? DEFAULT_MAX_PROGRESS_LINES;
@@ -265,7 +368,7 @@ export function buildStatusSnapshot(cwd, options = {}) {
 
 export function buildSingleJobSnapshot(cwd, reference, options = {}) {
   const workspaceRoot = resolveWorkspaceRoot(cwd);
-  const jobs = sortJobsNewestFirst(listJobs(workspaceRoot));
+  const jobs = sortJobsNewestFirst(listReconciledJobs(workspaceRoot));
   const selected = matchJobReference(jobs, reference);
 
   if (selected) {
@@ -290,7 +393,8 @@ export function buildSingleJobSnapshot(cwd, reference, options = {}) {
 
 export function resolveResultJob(cwd, reference) {
   const workspaceRoot = resolveWorkspaceRoot(cwd);
-  const jobs = sortJobsNewestFirst(reference ? listJobs(workspaceRoot) : filterJobsForCurrentSession(listJobs(workspaceRoot)));
+  const allJobs = listReconciledJobs(workspaceRoot);
+  const jobs = sortJobsNewestFirst(reference ? allJobs : filterJobsForCurrentSession(allJobs));
   const isFinished = (job) =>
     job.status === "completed" || job.status === "failed" || job.status === "cancelled";
   const isActive = (job) => job.status === "queued" || job.status === "running";
@@ -329,7 +433,7 @@ export function resolveResultJob(cwd, reference) {
 
 export function resolveCancelableJob(cwd, reference, options = {}) {
   const workspaceRoot = resolveWorkspaceRoot(cwd);
-  const jobs = sortJobsNewestFirst(listJobs(workspaceRoot));
+  const jobs = sortJobsNewestFirst(listReconciledJobs(workspaceRoot));
   const isActive = (job) => job.status === "queued" || job.status === "running";
   const activeJobs = jobs.filter(isActive);
 

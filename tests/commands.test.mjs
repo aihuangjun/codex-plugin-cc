@@ -160,7 +160,12 @@ test("rescue command absorbs continue semantics", () => {
   assert.match(agent, /the user asks for `spark`, map that to `--model gpt-5\.3-codex-spark`/i);
   assert.match(agent, /the user names a concrete model such as `gpt-5\.4-mini`, pass it through with `--model`/i);
   assert.match(agent, /Return the stdout of the `codex-companion` command exactly as-is/i);
-  assert.match(agent, /If the Bash call fails or Codex cannot be invoked, return nothing/i);
+  assert.match(agent, /If the Bash call fails or Codex cannot be invoked, return the command's error output/i);
+  assert.match(agent, /Never return an empty response/i);
+  assert.match(agent, /always pass `timeout: 600000` on that `Bash` call/i);
+  assert.match(agent, /Never forward `--help`, `-h`, or a request that consists only of flags/i);
+  assert.match(rescue, /still running/i);
+  assert.match(rescue, /--timeout-ms <ms>/);
   assert.match(agent, /gpt-5-4-prompting/);
   assert.match(agent, /only to tighten the user's request into a better Codex prompt/i);
   assert.match(agent, /Do not use that skill to inspect the repository, reason through the problem yourself, draft a solution, or do any independent work/i);
@@ -176,7 +181,8 @@ test("rescue command absorbs continue semantics", () => {
   assert.match(runtimeSkill, /Strip it before calling `task`/i);
   assert.match(runtimeSkill, /`--effort`: accepted values are `none`, `minimal`, `low`, `medium`, `high`, `xhigh`/i);
   assert.match(runtimeSkill, /Do not inspect the repository, read files, grep, monitor progress, poll status, fetch results, cancel jobs, summarize output, or do any follow-up work of your own/i);
-  assert.match(runtimeSkill, /If the Bash call fails or Codex cannot be invoked, return nothing/i);
+  assert.match(runtimeSkill, /If the Bash call fails or Codex cannot be invoked, return the error output/i);
+  assert.match(runtimeSkill, /with `timeout: 600000` on the `Bash` call/i);
   // Fork README is intentionally different from the upstream; only require that
   // every user-facing command is mentioned in it so the README stays in sync as
   // commands are added or removed.

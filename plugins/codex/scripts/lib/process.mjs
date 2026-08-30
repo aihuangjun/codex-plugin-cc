@@ -117,6 +117,27 @@ export function terminateProcessTree(pid, options = {}) {
   }
 }
 
+/**
+ * Best-effort liveness probe. Returns false only when the OS reports that no
+ * such process exists (ESRCH); permission errors mean the pid is alive but
+ * owned by someone else.
+ */
+export function isProcessAlive(pid, options = {}) {
+  if (!Number.isFinite(pid) || pid <= 0) {
+    return false;
+  }
+  const killImpl = options.killImpl ?? process.kill.bind(process);
+  try {
+    killImpl(pid, 0);
+    return true;
+  } catch (error) {
+    if (error?.code === "ESRCH") {
+      return false;
+    }
+    return true;
+  }
+}
+
 export function formatCommandFailure(result) {
   const parts = [`${result.command} ${result.args.join(" ")}`.trim()];
   if (result.signal) {

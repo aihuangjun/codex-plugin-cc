@@ -42,11 +42,13 @@ import {
   buildSingleJobSnapshot,
   buildStatusSnapshot,
   readStoredJob,
+  reconcileStaleJobs,
   resolveCancelableJob,
   resolveResultJob,
   sortJobsNewestFirst
 } from "./lib/job-control.mjs";
 import {
+  SESSION_ID_ENV,
   appendLogLine,
   createJobLogFile,
   createJobProgressUpdater,
@@ -55,7 +57,7 @@ import {
   nowIso,
   resolveSignalFile,
   runTrackedJob,
-  SESSION_ID_ENV
+  writeCompletionSignalFile
 } from "./lib/tracked-jobs.mjs";
 import { resolveWorkspaceRoot, createWorktree } from "./lib/workspace.mjs";
 import {
@@ -723,38 +725,58 @@ async function runForegroundCommand(job, runner, options = {}) {
   return execution;
 }
 
-function spawnDetachedTaskWorker(cwd, jobId) {
+function spawnDetachedTaskWorker(cwd, jobId, logFile = null) {
   const scriptPath = path.join(ROOT_DIR, "scripts", "codex-companion.mjs");
+  // Route the worker's stdout/stderr into the job log so a crash before the
+  // worker takes over the job record is never silent.
+  const logFd = logFile ? fs.openSync(logFile, "a") : null;
   const child = spawn(process.execPath, [scriptPath, "task-worker", "--cwd", cwd, "--job-id", jobId], {
     cwd,
     env: process.env,
     detached: true,
-    stdio: "ignore",
+    stdio: logFd === null ? "ignore" : ["ignore", logFd, logFd],
     windowsHide: true
   });
   child.unref();
+  if (logFd !== null) {
+    fs.closeSync(logFd);
+  }
   return child;
 }
 
 function enqueueBackgroundTask(cwd, job, request) {
   const { logFile, eventFile } = createTrackedProgress(job);
-  appendLogLine(logFile, "Queued for background execution.");
-
-  const child = spawnDetachedTaskWorker(cwd, job.id);
   const jobsDir = resolveJobsDir(job.workspaceRoot);
   const signalFile = resolveSignalFile(jobsDir, job.id);
   const queuedRecord = {
     ...job,
     status: "queued",
     phase: "queued",
-    pid: child.pid ?? null,
+    pid: null,
     logFile,
     eventFile,
     signalFile,
     request
   };
+
+  // Persist the full job record (including the request payload) BEFORE the
+  // worker exists. The worker's first action is to read this file; spawning
+  // first used to lose the race whenever `git rev-parse` in this workspace was
+  // slow, leaving the job stuck in `queued` forever.
   writeJobFile(job.workspaceRoot, job.id, queuedRecord);
   upsertJob(job.workspaceRoot, queuedRecord);
+  appendLogLine(logFile, "Queued for background execution.");
+
+  const child = spawnDetachedTaskWorker(cwd, job.id, logFile);
+  const pid = child.pid ?? null;
+  if (pid === null) {
+    const errorMessage = "Failed to spawn the background task worker.";
+    markJobFailedBeforeRun(job.workspaceRoot, job.id, errorMessage, { logFile });
+    throw new Error(errorMessage);
+  }
+  // Only the index learns the pid here. Rewriting the job file could race
+  // with the worker's own `running` record; the worker stores its pid itself.
+  upsertJob(job.workspaceRoot, { id: job.id, pid });
 
   return {
     payload: {
@@ -909,7 +931,7 @@ async function handleDiff(argv) {
 
 async function handleTask(argv) {
   const { options, positionals } = parseCommandInput(argv, {
-    valueOptions: ["model", "effort", "cwd", "prompt-file"],
+    valueOptions: ["model", "effort", "cwd", "prompt-file", "timeout-ms"],
     booleanOptions: ["json", "write", "resume-last", "resume", "fresh", "background", "worktree"],
     aliasMap: {
       m: "model"
@@ -927,6 +949,12 @@ async function handleTask(argv) {
   }
   const effort = normalizeReasoningEffort(options.effort);
   const prompt = readTaskPrompt(cwd, options, positionals);
+  if (!argv.includes("--") && promptLooksLikeFlagsOnly(prompt)) {
+    throw new Error(
+      `The task prompt "${shorten(prompt, 60)}" only contains unrecognized flags. ` +
+        "Pass the natural-language task text, or run `codex-companion.mjs --help` for usage."
+    );
+  }
 
   const resumeLast = Boolean(options["resume-last"] || options.resume);
   const fresh = Boolean(options.fresh);
@@ -974,24 +1002,198 @@ async function handleTask(argv) {
   }
 
   const job = buildTaskJob(workspaceRoot, taskMetadata, write, worktreeInfo, preassignedJobId);
-  await runForegroundCommand(
-    job,
-    (progress) =>
-      executeTaskRun({
-        cwd,
-        model,
-        effort,
-        prompt,
-        write,
-        resumeLast,
-        jobId: job.id,
-        worktreePath: worktreeInfo?.worktreePath ?? null,
-        worktreeBranch: worktreeInfo?.worktreeBranch ?? null,
-        worktreeBaseBranch: worktreeInfo?.worktreeBaseBranch ?? null,
-        onProgress: progress
-      }),
-    { json: options.json }
-  );
+  const request = buildTaskRequest({
+    cwd,
+    model,
+    effort,
+    prompt,
+    write,
+    resumeLast,
+    jobId: job.id,
+    worktreePath: worktreeInfo?.worktreePath ?? null,
+    worktreeBranch: worktreeInfo?.worktreeBranch ?? null,
+    worktreeBaseBranch: worktreeInfo?.worktreeBaseBranch ?? null
+  });
+
+  if (isInlineForegroundEnabled()) {
+    await runForegroundCommand(
+      job,
+      (progress) => executeTaskRun({ ...request, onProgress: progress }),
+      { json: options.json }
+    );
+    return;
+  }
+
+  // Default foreground mode: the Codex turn runs in a detached worker exactly
+  // like `--background`, and this process only waits, streams progress and
+  // prints the stored result. If the caller (typically a tool harness with a
+  // hard command timeout) kills this process, the job keeps running and the
+  // result stays retrievable through `status`/`result`.
+  ensureCodexAvailable(cwd);
+  requireTaskRequest(prompt, resumeLast);
+  await runTaskViaWorker(cwd, job, request, {
+    json: options.json,
+    timeoutMs: options["timeout-ms"]
+  });
+}
+
+export const FOREGROUND_INLINE_ENV = "CODEX_COMPANION_FOREGROUND_INLINE";
+export const FOREGROUND_TIMEOUT_ENV = "CODEX_COMPANION_FOREGROUND_TIMEOUT_MS";
+// Slightly below Claude Code's 10-minute Bash ceiling so the "still running"
+// hint is printed before the harness can kill us.
+const DEFAULT_FOREGROUND_TIMEOUT_MS = 570_000;
+const FOREGROUND_POLL_INTERVAL_MS = 250;
+const LOG_LINE_PATTERN = /^\[\d{4}-\d{2}-\d{2}T[^\]]+\] (.*)$/;
+// Multi-line log blocks start with one of these titles; their bodies are not
+// progress and the inline reporter never echoed them either.
+const LOG_BLOCK_TITLES = new Set(["Assistant message", "Reasoning summary", "Final output", "Review output"]);
+
+function isInlineForegroundEnabled(env = process.env) {
+  const raw = env[FOREGROUND_INLINE_ENV];
+  return raw === "1" || raw === "true";
+}
+
+function resolveForegroundTimeoutMs(explicit, env = process.env) {
+  const candidates = [explicit, env[FOREGROUND_TIMEOUT_ENV]];
+  for (const candidate of candidates) {
+    if (candidate == null || candidate === "") {
+      continue;
+    }
+    const parsed = Number(candidate);
+    if (Number.isFinite(parsed) && parsed >= 0) {
+      return parsed;
+    }
+  }
+  return DEFAULT_FOREGROUND_TIMEOUT_MS;
+}
+
+function renderStillRunningHint(jobId) {
+  return [
+    `Codex task ${jobId} is still running; this command stopped waiting but the job continues in the background.`,
+    "",
+    `  /codex:status ${jobId} --wait   — keep waiting for completion`,
+    `  /codex:result ${jobId}          — final output once it finishes`,
+    `  /codex:cancel ${jobId}          — abort the run`
+  ].join("\n");
+}
+
+function createLogTailer(logFile, onLine) {
+  let offset = 0;
+  let carry = "";
+  return () => {
+    if (!logFile || !fs.existsSync(logFile)) {
+      return;
+    }
+    let content;
+    try {
+      const stat = fs.statSync(logFile);
+      if (stat.size <= offset) {
+        return;
+      }
+      const fd = fs.openSync(logFile, "r");
+      try {
+        const buffer = Buffer.alloc(stat.size - offset);
+        fs.readSync(fd, buffer, 0, buffer.length, offset);
+        content = buffer.toString("utf8");
+      } finally {
+        fs.closeSync(fd);
+      }
+      offset = stat.size;
+    } catch {
+      return;
+    }
+    const chunks = (carry + content).split("\n");
+    carry = chunks.pop() ?? "";
+    for (const line of chunks) {
+      const match = LOG_LINE_PATTERN.exec(line);
+      if (match && !LOG_BLOCK_TITLES.has(match[1])) {
+        onLine(match[1]);
+      }
+    }
+  };
+}
+
+async function runTaskViaWorker(cwd, job, request, options = {}) {
+  const { payload: launch } = enqueueBackgroundTask(cwd, job, request);
+  const timeoutMs = resolveForegroundTimeoutMs(options.timeoutMs);
+  const deadline = Date.now() + timeoutMs;
+  const streamProgress = !options.json;
+  const tail = createLogTailer(launch.logFile, (line) => {
+    if (streamProgress) {
+      process.stderr.write(`[codex] ${line}\n`);
+    }
+  });
+
+  let interrupted = null;
+  const onSignal = (signal) => {
+    interrupted = signal;
+  };
+  process.on("SIGINT", onSignal);
+  process.on("SIGTERM", onSignal);
+  process.on("SIGHUP", onSignal);
+
+  let stored = null;
+  try {
+    for (;;) {
+      tail();
+      try {
+        stored = readStoredJob(job.workspaceRoot, job.id);
+      } catch {
+        stored = null; // transiently unreadable: keep waiting
+      }
+      if (stored && ["completed", "failed", "cancelled"].includes(stored.status)) {
+        break;
+      }
+      if (interrupted) {
+        process.stderr.write(`${renderStillRunningHint(job.id)}\n`);
+        process.exitCode = interrupted === "SIGINT" ? 130 : 143;
+        return;
+      }
+      if (Date.now() >= deadline) {
+        // Not a failure: the job is alive. Print the hint on both streams so
+        // a forwarder that only relays stdout still shows the user what to do.
+        process.stderr.write(`${renderStillRunningHint(job.id)}\n`);
+        if (options.json) {
+          outputResult({ ...launch, status: "running", waitTimedOut: true, timeoutMs }, true);
+        } else {
+          process.stdout.write(`${renderStillRunningHint(job.id)}\n`);
+        }
+        return;
+      }
+      // Give up early if the worker vanished; reconciliation converts it to failed.
+      const [reconciled] = reconcileStaleJobs(job.workspaceRoot, [{ ...(stored ?? job), id: job.id }]);
+      if (reconciled && reconciled.status === "failed") {
+        stored = readStoredJob(job.workspaceRoot, job.id) ?? { ...reconciled };
+        break;
+      }
+      await sleep(FOREGROUND_POLL_INTERVAL_MS);
+    }
+  } finally {
+    process.off("SIGINT", onSignal);
+    process.off("SIGTERM", onSignal);
+    process.off("SIGHUP", onSignal);
+  }
+  tail();
+
+  if (stored.status === "completed") {
+    outputResult(options.json ? stored.result ?? {} : stored.rendered ?? "", options.json);
+    return;
+  }
+
+  const errorMessage = stored.errorMessage ?? (stored.status === "cancelled" ? "Cancelled by user." : null);
+  if (stored.rendered) {
+    outputResult(options.json ? stored.result ?? { errorMessage } : stored.rendered, options.json);
+  } else if (options.json) {
+    outputResult({ jobId: job.id, status: stored.status, errorMessage: errorMessage ?? "Codex task failed." }, true);
+  }
+  if (errorMessage) {
+    process.stderr.write(`${errorMessage}\n`);
+  } else if (!stored.rendered) {
+    process.stderr.write("Codex task failed.\n");
+  }
+  // Preserve the executor's exit status (the inline path used it directly).
+  const storedStatus = stored.result?.status;
+  process.exitCode = Number.isInteger(storedStatus) && storedStatus !== 0 ? storedStatus : 1;
 }
 
 async function handleTransfer(argv) {
@@ -1007,6 +1209,85 @@ async function handleTransfer(argv) {
   outputCommandResult(payload, rendered, options.json);
 }
 
+const WORKER_JOB_LOOKUP_TIMEOUT_MS = 10_000;
+const WORKER_JOB_LOOKUP_INTERVAL_MS = 100;
+
+async function readStoredJobWithRetry(workspaceRoot, jobId, timeoutMs = WORKER_JOB_LOOKUP_TIMEOUT_MS) {
+  const deadline = Date.now() + timeoutMs;
+  let lastError = null;
+  for (;;) {
+    try {
+      const storedJob = readStoredJob(workspaceRoot, jobId);
+      if (storedJob && storedJob.request && typeof storedJob.request === "object") {
+        return storedJob;
+      }
+      if (storedJob) {
+        // Records are written atomically: present means complete, so this is final.
+        throw new Error(`Stored job ${jobId} is missing its task request payload.`);
+      }
+      lastError = new Error(`No stored job found for ${jobId}.`);
+    } catch (error) {
+      // A partially written or transiently unreadable record: keep waiting.
+      lastError = error instanceof Error ? error : new Error(String(error));
+    }
+    if (Date.now() >= deadline) {
+      throw lastError;
+    }
+    await sleep(WORKER_JOB_LOOKUP_INTERVAL_MS);
+  }
+}
+
+/**
+ * Mark a job as failed when the worker dies before `runTrackedJob` took
+ * ownership of the record. Without this, a crash during worker start-up
+ * leaves the job in `queued` with no signal file, so Monitor-based waiters
+ * never wake up.
+ */
+function markJobFailedBeforeRun(workspaceRoot, jobId, errorMessage, options = {}) {
+  const completedAt = nowIso();
+  let existing = null;
+  try {
+    existing = readStoredJob(workspaceRoot, jobId);
+  } catch {
+    existing = null;
+  }
+  if (existing && ["completed", "failed", "cancelled"].includes(existing.status)) {
+    return;
+  }
+  const logFile = options.logFile ?? existing?.logFile ?? null;
+  try {
+    appendLogLine(logFile, `Failed before start: ${errorMessage}`);
+  } catch {
+    // best-effort
+  }
+  const failedRecord = {
+    ...(existing ?? { id: jobId, workspaceRoot }),
+    status: "failed",
+    phase: "failed",
+    pid: null,
+    errorMessage,
+    completedAt
+  };
+  try {
+    writeJobFile(workspaceRoot, jobId, failedRecord);
+  } catch {
+    // best-effort
+  }
+  try {
+    upsertJob(workspaceRoot, {
+      id: jobId,
+      status: "failed",
+      phase: "failed",
+      pid: null,
+      errorMessage,
+      completedAt
+    });
+  } catch {
+    // best-effort
+  }
+  writeCompletionSignalFile(resolveJobsDir(workspaceRoot), jobId, "failed", errorMessage);
+}
+
 async function handleTaskWorker(argv) {
   const { options } = parseCommandInput(argv, {
     valueOptions: ["cwd", "job-id"]
@@ -1018,14 +1299,32 @@ async function handleTaskWorker(argv) {
 
   const cwd = resolveCommandCwd(options);
   const workspaceRoot = resolveCommandWorkspace(options);
-  const storedJob = readStoredJob(workspaceRoot, options["job-id"]);
-  if (!storedJob) {
-    throw new Error(`No stored job found for ${options["job-id"]}.`);
-  }
+  const jobId = options["job-id"];
 
+  // Anything that escapes before runTrackedJob owns the record must still
+  // leave a terminal state behind: the worker is detached and its stderr
+  // only reaches the job log, so a silent exit would strand the job.
+  const failFast = (error) => {
+    const message = error instanceof Error ? error.message : String(error);
+    markJobFailedBeforeRun(workspaceRoot, jobId, message);
+    process.stderr.write(`${message}\n`);
+    process.exit(1);
+  };
+  process.on("uncaughtException", failFast);
+  process.on("unhandledRejection", failFast);
+
+  let storedJob;
+  try {
+    storedJob = await readStoredJobWithRetry(workspaceRoot, jobId);
+  } catch (error) {
+    failFast(error);
+    return;
+  }
   const request = storedJob.request;
-  if (!request || typeof request !== "object") {
-    throw new Error(`Stored job ${options["job-id"]} is missing its task request payload.`);
+  if (storedJob.status !== "queued") {
+    // Already claimed (or finished/cancelled) by someone else — do not rerun.
+    process.stderr.write(`Job ${jobId} is ${storedJob.status}; worker exiting without rerun.\n`);
+    return;
   }
 
   const { logFile, eventFile, eventStream, progress } = createTrackedProgress(
@@ -1263,9 +1562,31 @@ function handleHistory(argv) {
   outputCommandResult(payload, renderHistoryReport(payload), options.json);
 }
 
+function wantsHelp(argv) {
+  for (const token of argv) {
+    if (token === "--") {
+      return false;
+    }
+    if (token === "--help" || token === "-h") {
+      return true;
+    }
+  }
+  return false;
+}
+
+export function promptLooksLikeFlagsOnly(prompt) {
+  const tokens = String(prompt ?? "").trim().split(/\s+/).filter(Boolean);
+  return tokens.length > 0 && tokens.every((token) => /^--?[a-z][\w-]*(=.*)?$/i.test(token));
+}
+
 async function main() {
   const [subcommand, ...argv] = process.argv.slice(2);
-  if (!subcommand || subcommand === "help" || subcommand === "--help") {
+  if (!subcommand || subcommand === "help" || subcommand === "--help" || subcommand === "-h") {
+    printUsage();
+    return;
+  }
+  if (wantsHelp(argv)) {
+    // `task --help` must never be forwarded to Codex as a prompt.
     printUsage();
     return;
   }

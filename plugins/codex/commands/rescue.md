@@ -46,6 +46,7 @@ Execution mode:
   5. Do not skip the Monitor setup. Do not poll `/codex:status` manually — rely on the Monitor to detect completion.
 - If the request includes `--wait`, run the `codex:codex-rescue` subagent in the foreground.
 - If neither flag is present, default to foreground.
+- Foreground `task` executes the Codex turn in a detached worker and waits up to ~9.5 minutes (override with `--timeout-ms <ms>` or `CODEX_COMPANION_FOREGROUND_TIMEOUT_MS`). When the output says the task is still running, surface the job id and the `/codex:status <id> --wait` / `/codex:result <id>` commands verbatim; the job is not lost. Dead workers are detected automatically: `/codex:status` converts a job whose worker process disappeared into `failed` instead of showing it as active forever.
 - `--background` and `--wait` are execution flags for Claude Code. Do not forward them to `task`, and do not treat them as part of the natural-language task text.
 - `--worktree` runs the task in an isolated git worktree. Codex works in `.claude/worktrees/<jobId>/` on a separate branch, leaving the main working directory untouched. `--worktree` and `--resume`/`--resume-last` are mutually exclusive. Preserve `--worktree` for the forwarded `task` call.
 - `--model` and `--effort` are runtime-selection flags. Preserve them for the forwarded `task` call, but do not treat them as part of the natural-language task text.

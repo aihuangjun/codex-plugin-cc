@@ -197,6 +197,28 @@ pgrep -fc app-server-broker
 
 ---
 
+### 场景 7：任务可靠性（v2.0.6）——不再"卡在 queued / 长时间无响应"
+
+三个可直接验证的行为：
+
+1. **后台任务一定会结束**（要么 completed/failed，要么可 cancel）：
+
+   ```text
+   /codex:rescue --background 只回复 PONG，不要执行任何命令
+   ```
+
+   **期望** — 10～30 秒内 `/codex:status <jobId>` 变为 `completed`，`.done` 信号文件出现。旧版在大仓库（如 home 目录本身是 git 仓库）里 100% 卡在 `queued`：worker 比 job 记录先出生、读不到记录就静默退出。
+
+2. **worker 死掉会被识别**：`kill -9` 掉 `/codex:status` 里 running 任务的 pid，再跑 `/codex:status <jobId>`。
+
+   **期望** — 状态变为 `failed`，错误信息 `Worker process <pid> exited before the job finished.`，`.done` 已写出（Monitor 会被唤醒），`/codex:result` 可读。
+
+3. **前台任务被杀不丢结果**：终端里跑 `node "${CLAUDE_PLUGIN_ROOT}/scripts/codex-companion.mjs" task "..."` 然后 `Ctrl+C`。
+
+   **期望** — 打印 "still running" 提示和 job id；稍后 `/codex:result <jobId>` 能拿到结果。前台默认最多等 9.5 分钟（`--timeout-ms` / `CODEX_COMPANION_FOREGROUND_TIMEOUT_MS` 可调），超时同样打印提示并正常退出，任务继续。`CODEX_COMPANION_FOREGROUND_INLINE=1` 可切回旧的进程内执行。
+
+另外：`task --help` 现在打印用法（旧版会把 `--help` 当 prompt 发给 Codex 白跑一轮）；只含 flag 的 prompt 会被直接拒绝。
+
 ## 四、绕过 Claude Code 直接跑底层
 
 最适合排错和确认"流式真的实时刷新"（Claude Code 的 stdout 渲染是批式，终端是真流式）：
@@ -244,6 +266,8 @@ npm test
 | broker 仍累积 | `pgrep -af app-server-broker` 看 PID 全 `kill -9`；下次 review/task 会重启新 broker |
 | `--worktree` 报 "already exists" | `git worktree list` 看残留；`git worktree remove .claude/worktrees/<jobId>` 清掉 |
 | `/codex:status` 看不到刚启动的后台 job | 等 1-2 秒（worker spawn 需要时间）再查；或用 launch payload 给的 jobId 直接 `/codex:status <jobId>` |
+| 后台任务一直 `queued` / `running` | v2.0.6 起 `/codex:status` 会自动把 worker 已不存在的任务标记为 `failed`；查看 `<jobsDir>/<jobId>.log`，worker 的启动错误现在会写进去 |
+| rescue subagent 返回空 | 多半是 Bash 工具 2 分钟超时杀掉了前台进程；v2.0.6 起任务在 detached worker 中继续，`/codex:status` / `/codex:result <jobId>` 可取回；agent 已要求 Bash `timeout: 600000` |
 
 ---
 

@@ -1215,6 +1215,7 @@ test("status shows phases, hints, and the latest finished job", () => {
             kind: "review",
             kindLabel: "review",
             status: "running",
+            pid: process.pid,
             title: "Codex Review",
             jobClass: "review",
             phase: "reviewing",
@@ -1358,6 +1359,7 @@ test("status preserves adversarial review kind labels", () => {
             id: "review-adv-live",
             kind: "adversarial-review",
             status: "running",
+            pid: process.pid,
             title: "Codex Adversarial Review",
             jobClass: "review",
             phase: "reviewing",
@@ -1413,6 +1415,7 @@ test("status --wait times out cleanly when a job is still active", () => {
       {
         id: "task-live",
         status: "running",
+        pid: process.pid,
         title: "Codex Task",
         logFile
       },
@@ -1432,6 +1435,7 @@ test("status --wait times out cleanly when a job is still active", () => {
           {
             id: "task-live",
             status: "running",
+            pid: process.pid,
             title: "Codex Task",
             jobClass: "task",
             summary: "Investigate flaky test",
@@ -1759,6 +1763,7 @@ test("cancel without a job id ignores active jobs from other Claude sessions", (
           {
             id: "task-other",
             status: "running",
+            pid: process.pid,
             title: "Codex Task",
             jobClass: "task",
             sessionId: "sess-other",
@@ -1814,6 +1819,7 @@ test("cancel with a job id can still target an active job from another Claude se
           {
             id: "task-other",
             status: "running",
+            pid: process.pid,
             title: "Codex Task",
             jobClass: "task",
             sessionId: "sess-other",

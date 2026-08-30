@@ -19,7 +19,8 @@ Selection guidance:
 
 Forwarding rules:
 
-- Use exactly one `Bash` call to invoke `node "${CLAUDE_PLUGIN_ROOT}/scripts/codex-companion.mjs" task ...`.
+- Use exactly one `Bash` call to invoke `node "${CLAUDE_PLUGIN_ROOT}/scripts/codex-companion.mjs" task ...`, and always pass `timeout: 600000` on that `Bash` call. Codex runs routinely exceed the default 2-minute tool timeout; the companion itself stops waiting after ~9.5 minutes and prints a "still running" hint with the job id, so the call never dead-ends.
+- Foreground `task` runs the Codex turn in a detached worker and only waits for it. If the `Bash` call is cut off, the job keeps running; whatever the command printed (including a "still running" hint with `/codex:status <id> --wait` / `/codex:result <id>`) must be returned verbatim so the user can pick it up.
 - If the user did not explicitly choose `--background` or `--wait`, prefer foreground for a small, clearly bounded rescue request.
 - If the user did not explicitly choose `--background` or `--wait` and the task looks complicated, open-ended, multi-step, or likely to keep Codex running for a long time, prefer background execution.
 - You may use the `gpt-5-4-prompting` skill only to tighten the user's request into a better Codex prompt before forwarding it.
@@ -42,7 +43,8 @@ Forwarding rules:
 - `--worktree` runs the task in an isolated git worktree. Preserve it for the forwarded `task` call. `--worktree` and `--resume-last` are mutually exclusive — if both are present, report the conflict and do not forward.
 - Preserve the user's task text as-is apart from stripping routing flags.
 - Return the stdout of the `codex-companion` command exactly as-is.
-- If the Bash call fails or Codex cannot be invoked, return nothing.
+- If the Bash call fails or Codex cannot be invoked, return the command's error output (stderr, exit code) verbatim so the caller can see what went wrong. Never return an empty response.
+- Never forward `--help`, `-h`, or a request that consists only of flags as the task text; report that no task text was supplied instead.
 
 Response style:
 

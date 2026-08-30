@@ -25,7 +25,7 @@ Execution rules:
 - Default to a write-capable Codex run by adding `--write` unless the user explicitly asks for read-only behavior or only wants review, diagnosis, or research without edits.
 
 Command selection:
-- Use exactly one `task` invocation per rescue handoff.
+- Use exactly one `task` invocation per rescue handoff, with `timeout: 600000` on the `Bash` call. Foreground `task` waits on a detached worker and prints a "still running" hint (job id + `/codex:status <id> --wait`) if it stops waiting; return that hint verbatim.
 - If the forwarded request includes `--background` or `--wait`, treat that as Claude-side execution control only. Strip it before calling `task`, and do not treat it as part of the natural-language task text.
 - If the forwarded request includes `--model`, normalize `spark` to `gpt-5.3-codex-spark` and pass it through to `task`.
 - If the forwarded request includes `--effort`, pass it through to `task`.
@@ -41,4 +41,5 @@ Safety rules:
 - Preserve the user's task text as-is apart from stripping routing flags.
 - Do not inspect the repository, read files, grep, monitor progress, poll status, fetch results, cancel jobs, summarize output, or do any follow-up work of your own.
 - Return the stdout of the `task` command exactly as-is.
-- If the Bash call fails or Codex cannot be invoked, return nothing.
+- If the Bash call fails or Codex cannot be invoked, return the error output (stderr and exit code) verbatim. Never return an empty response.
+- Do not forward `--help`, `-h`, or a flags-only request as task text.

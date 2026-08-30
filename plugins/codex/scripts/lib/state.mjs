@@ -2,6 +2,7 @@ import { createHash } from "node:crypto";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import process from "node:process";
 
 import { resolveWorkspaceRoot } from "./workspace.mjs";
 
@@ -248,7 +249,7 @@ export function saveState(cwd, state) {
     removeFileIfExists(job.eventFile);
   }
 
-  fs.writeFileSync(resolveStateFile(cwd), `${JSON.stringify(nextState, null, 2)}\n`, "utf8");
+  writeFileAtomic(resolveStateFile(cwd), `${JSON.stringify(nextState, null, 2)}\n`);
   return nextState;
 }
 
@@ -300,10 +301,29 @@ export function getConfig(cwd) {
   return loadState(cwd).config;
 }
 
+/**
+ * Write via a sibling temp file + rename so concurrent readers (the detached
+ * task worker, `status`, hooks) never observe a half-written JSON document.
+ */
+export function writeFileAtomic(filePath, content) {
+  const tempFile = `${filePath}.${process.pid}.${Date.now().toString(36)}.tmp`;
+  fs.writeFileSync(tempFile, content, "utf8");
+  try {
+    fs.renameSync(tempFile, filePath);
+  } catch (error) {
+    try {
+      fs.unlinkSync(tempFile);
+    } catch {
+      // ignore
+    }
+    throw error;
+  }
+}
+
 export function writeJobFile(cwd, jobId, payload) {
   ensureStateDir(cwd);
   const jobFile = resolveJobFile(cwd, jobId);
-  fs.writeFileSync(jobFile, `${JSON.stringify(payload, null, 2)}\n`, "utf8");
+  writeFileAtomic(jobFile, `${JSON.stringify(payload, null, 2)}\n`);
   return jobFile;
 }
 

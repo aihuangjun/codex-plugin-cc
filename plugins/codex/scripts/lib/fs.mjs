@@ -32,9 +32,28 @@ export function isProbablyText(buffer) {
   return true;
 }
 
+/**
+ * Read stdin only when it is a pipe, a socket (Node's child_process pipes are
+ * sockets) or a file. Character devices such as a TTY-less /dev/tty are
+ * skipped so a harness that leaves such a handle open can never block the
+ * command forever.
+ */
 export function readStdinIfPiped() {
   if (process.stdin.isTTY) {
     return "";
   }
-  return fs.readFileSync(0, "utf8");
+  let stat;
+  try {
+    stat = fs.fstatSync(0);
+  } catch {
+    return "";
+  }
+  if (!stat.isFIFO() && !stat.isFile() && !stat.isSocket()) {
+    return "";
+  }
+  try {
+    return fs.readFileSync(0, "utf8");
+  } catch {
+    return "";
+  }
 }
