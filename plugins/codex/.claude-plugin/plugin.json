@@ -1,6 +1,6 @@
 {
   "name": "codex",
-  "version": "2.0.5",
+  "version": "2.0.6",
   "description": "Use Codex from Claude Code with streaming review progress, Chinese output, and completion notifications.",
   "author": {
     "name": "shengxia.hj"
